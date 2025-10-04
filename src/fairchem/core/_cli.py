@@ -505,3 +505,6 @@ def main(
             Submitit()(cfg)
             if "reducer" in cfg:
                 Submitit()(cfg, RunType.REDUCE)
+
+if __name__ == "__main__":
+    main()
