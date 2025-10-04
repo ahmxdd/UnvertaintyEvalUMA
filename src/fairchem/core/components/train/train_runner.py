@@ -98,6 +98,7 @@ class TrainCheckpointCallback(Callback):
         if (
             self.checkpoint_every_n_steps is not None
             and step % self.checkpoint_every_n_steps == 0
+            and step > 0
         ):
             self.save_callback(os.path.join(self.checkpoint_dir, f"step_{step}"))
             # on main rank only
@@ -147,6 +148,7 @@ class TrainEvalRunner(Runner):
         )
         logging.info(f"Train Dataloader size {len(self.train_dataloader)}")
         logging.info(f"Eval Dataloader size {len(self.eval_dataloader)}")
+        
 
     def run(self) -> None:
         if self.checkpoint_callback is not None:

@@ -738,32 +738,63 @@ class MLP_Energy_Head(nn.Module, HeadInterface):
             nn.SiLU(),
             nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
             nn.SiLU(),
-            nn.Linear(self.hidden_channels, 1, bias=True),
+            nn.Linear(self.hidden_channels, 4, bias=True),
         )
 
     def forward(
         self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
     ) -> dict[str, torch.Tensor]:
-        node_energy = self.energy_block(
-            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
-        ).view(-1, 1, 1)
-
+        # node_energy = self.energy_block(
+        #     emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        # ).view(-1, 1, 1)
+        out = self.energy_block(
+             emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        )
+        node_energy = out[:, 0].view(-1,1,1)
+        precision = out[:, 1]
+        shape = out[:, 2]
+        rate = out[:, 3]
+        
         energy_part = torch.zeros(
             len(data_dict["natoms"]),
             device=node_energy.device,
             dtype=node_energy.dtype,
         )
+        precision_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+        shape_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+        rate_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+        
 
         energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
+        precision_part.index_add_(0, data_dict["batch"], precision)
+        shape_part.index_add_(0, data_dict["batch"], shape)
+        rate_part.index_add_(0, data_dict["batch"], rate)
+        
         if gp_utils.initialized():
             energy = gp_utils.reduce_from_model_parallel_region(energy_part)
+            precision_part = gp_utils.reduce_from_model_parallel_region(precision_part)
+            shape_part = gp_utils.reduce_from_model_parallel_region(precision_part)
+            rate_part = gp_utils.reduce_from_model_parallel_region(precision_part)
         else:
             energy = energy_part
 
         if self.reduce == "sum":
-            return {"energy": energy}
+            return {"energy": energy, "precision": precision_part, "shape": shape_part, "rate": rate_part}
         elif self.reduce == "mean":
-            return {"energy": energy / data_dict["natoms"]}
+            return {"energy": energy / data_dict["natoms"], "precision": precision_part / data_dict["natoms"],
+                    "shape": shape_part / data_dict["natoms"], "rate": rate_part / data_dict["natoms"]}
         else:
             raise ValueError(
                 f"reduce can only be sum or mean, user provided: {self.reduce}"

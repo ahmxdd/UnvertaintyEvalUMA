@@ -185,6 +185,7 @@ def per_atom_mae(
     target: dict[str, torch.Tensor],
     key: Hashable = NONE_SLICE,
 ) -> torch.Tensor:
+    
     return torch.abs(target[key] - prediction[key]) / target["natoms"].unsqueeze(1)
 
 

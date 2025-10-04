@@ -167,7 +167,17 @@ class MOLE(torch.nn.Module):
         return linear
 
     def forward(self, x):
+        
         with torch.autocast(device_type=self.weights.device.type, enabled=False):
+
+            expert_weights = self.global_mole_tensors.expert_mixing_coefficients
+            mean_expert_weights = expert_weights.mean(dim=0)
+            expert_weight_dict = {
+                        f"expert_weight_{i}": w.item() 
+                        for i, w in enumerate(mean_expert_weights)
+                    }
+            
+            
             weights = torch.einsum(
                 "eoi, be->boi",
                 self.weights,

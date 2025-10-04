@@ -16,6 +16,8 @@ from torch import nn
 from fairchem.core.common import distutils, gp_utils
 from fairchem.core.common.registry import registry
 
+from fairchem.core.common.logger import WandBSingletonLogger
+
 
 class DDPMTLoss(nn.Module):
     """
@@ -76,6 +78,7 @@ class DDPMTLoss(nn.Module):
         assert self.reduction in list(
             self.reduction_map.keys()
         ), "Reduction must be one of: 'mean', 'sum', 'per_structure'"
+        
 
     def sum(self, input, mult_mask, num_samples, loss, natoms):
         # this sum will reduce the loss down to a single scalar
@@ -140,8 +143,26 @@ class DDPMTLoss(nn.Module):
         target: torch.Tensor,
         mult_mask: torch.Tensor,
         natoms: torch.Tensor,
+        step
     ):
         # ensure torch doesn't do any unwanted broadcasting
+        if type(input) == list:
+            loss = (
+            self.loss_fn(
+                input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step=step
+            )
+            * mult_mask
+            )
+            loss = self._reduction(input, mult_mask, loss, natoms)
+
+            # Zero out nans, if any
+            found_nans_or_infs = not torch.all(loss.isfinite())
+            if found_nans_or_infs is True:
+                logging.warning("Found nans while computing loss")
+                loss = torch.nan_to_num(loss, nan=0.0)
+
+            return self.coefficient * loss
+    
         assert (
             input.shape[0] == target.shape[0] == mult_mask.shape[0]
         ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
@@ -177,7 +198,7 @@ class MAELoss(nn.Module):
         self.loss.reduction = "none"
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
     ) -> torch.Tensor:
         return self.loss(pred, target)
 
@@ -191,7 +212,7 @@ class MSELoss(nn.Module):
         self.loss.reduction = "none"
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
     ) -> torch.Tensor:
         return self.loss(pred, target)
 
@@ -210,14 +231,101 @@ class PerAtomMAELoss(nn.Module):
         self.loss.reduction = "none"
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
     ) -> torch.Tensor:
         _natoms = torch.reshape(natoms, target.shape)
         # check if target is a scalar
         assert target.dim() == 1 or (target.dim() == 2 and target.shape[1] == 1)
         # check per_atom shape
         assert (target / _natoms).shape == target.shape
+
         return self.loss(pred / _natoms, target / _natoms)
+    
+
+@registry.register_loss("invgamma")
+class InvGammaLoss(nn.Module):
+    """
+    inverse gamma loss
+    """
+
+    def __init__(self, lambda_reg: float = 0.1) -> None:
+        super().__init__()
+        #self.loss = nn.L1Loss()
+        # reduction should be none as it is handled in DDPLoss
+        #self.loss.reduction = "none"
+        self.eps = 1e-6
+        self.lambda_reg = lambda_reg
+        self.logger = (
+            WandBSingletonLogger.get_instance()
+        )
+
+    def forward(
+        self, pred, target: torch.Tensor, natoms: torch.Tensor, step
+    ) -> torch.Tensor:
+        
+        mu = pred[0].squeeze() / natoms
+        precision = pred[1].squeeze() 
+        shape = pred[2].squeeze()
+        rate =  pred[3].squeeze()
+        target = target / natoms
+
+        
+        nu = torch.nn.functional.softplus(precision) + self.eps
+        alpha = torch.nn.functional.softplus(shape) + 1 + self.eps 
+        beta = torch.nn.functional.softplus(rate) + self.eps
+
+        term1 = 0.5 * torch.log(torch.pi / nu)
+        omega = 2 * beta * (1+nu)
+        term2 = -alpha * torch.log(omega)
+        term3 = (alpha + 0.5) * torch.log(
+            nu * (target-mu) ** 2 + omega
+        )
+        term4 = torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
+
+        regularizer = torch.abs(target - mu) * (2 * nu + alpha)
+
+        nll = term1 + term2 + term3 + term4
+        total_loss = nll + self.lambda_reg * regularizer
+        
+        
+        log_dict = {
+            "loss_terms/nu" : torch.mean(nu),
+            "loss_terms/nu_std" : torch.std(nu),
+            "loss_terms/alpha" : torch.mean(alpha),
+            "loss_terms/alpha_std" : torch.std(alpha),
+            "loss_terms/beta" : torch.mean(beta),
+            "loss_terms/beta_std" : torch.std(beta),
+            "loss_terms/term1" : torch.mean(term1),
+            "loss_terms/term1_std" : torch.std(term1),
+            "loss_terms/term2" : torch.mean(term2),
+            "loss_terms/term2_std" : torch.std(term2),
+            "loss_terms/term3" : torch.mean(term3),
+            "loss_terms/term3_std" : torch.std(term3),
+            "loss_terms/term4" : torch.mean(term4),
+            "loss_terms/term4_std" : torch.std(term4),
+            "loss_terms/mse_error" : torch.mean((target-mu)** 2),
+            "loss_terms/mse_errorstd" : torch.std((target-mu)** 2),
+            "loss_terms/abs_error" : torch.mean(torch.abs(target-mu)),
+            "loss_terms/abs_errorstd" : torch.std(torch.abs(target-mu)),
+            "loss_terms/regularizer" : torch.mean(regularizer),
+            "loss_terms/precision" : torch.mean(precision),
+            "loss_terms/shape" : torch.mean(shape),
+            "loss_terms/rate" : torch.mean(rate),
+            "loss_terms/target" : torch.mean(target),
+            "loss_terms/omega" : torch.mean(omega),
+            "loss_terms/nll" : torch.mean(nll),
+            "loss_terms/total_loss" : torch.mean(total_loss),
+            "loss_terms/mu" : torch.mean(mu),
+        }
+        self.logger.log(log_dict, step=step, commit=False)
+        
+        return total_loss
+
+        if step <= 25000:
+            return torch.abs(target - mu)
+        else:
+            return total_loss
+
 
 
 @registry.register_loss("l2norm")

@@ -12,7 +12,7 @@ import logging
 import os
 import random
 import tempfile
-import uuid
+import uuid, datetime
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -286,7 +286,7 @@ class Submitit(Checkpointable):
             self.runner.load_state(self.config.job.runner_state_path)
             self.runner.run()
         elif run_type == RunType.REDUCE:
-            logging.info("Calling reducer.reduce() ...")
+            logging.info("Calling reducer. reduce() ...")
             self.reducer: Reducer = hydra.utils.instantiate(self.config.reducer)
             self.reducer.job_config = self.config.job
             self.reducer.runner_config = self.config.runner
@@ -311,10 +311,11 @@ class Submitit(Checkpointable):
             simple_config = OmegaConf.to_container(
                 self.config, resolve=True, throw_on_missing=True
             )
+            run_name = f"{self.config.job.run_name} {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
             logger_initializer(
                 config=simple_config,
                 run_id=self.config.job.timestamp_id,
-                run_name=self.config.job.run_name,
+                run_name=run_name,
                 log_dir=self.config.job.metadata.log_dir,
             )
 
@@ -505,3 +506,8 @@ def main(
             Submitit()(cfg)
             if "reducer" in cfg:
                 Submitit()(cfg, RunType.REDUCE)
+
+# ...existing code...
+
+if __name__ == "__main__":
+    main()

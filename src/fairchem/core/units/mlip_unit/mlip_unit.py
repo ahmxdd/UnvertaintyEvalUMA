@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import datetime
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Sequence
@@ -58,7 +59,6 @@ from fairchem.core.units.mlip_unit.api.inference import (
     MLIPInferenceCheckpoint,
 )
 from fairchem.core.units.mlip_unit.utils import load_inference_model
-
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
@@ -223,7 +223,7 @@ def get_output_masks(
 
 
 def compute_loss(
-    tasks: Sequence[Task], predictions: dict[str, torch.Tensor], batch: AtomicData
+    tasks: Sequence[Task], predictions: dict[str, torch.Tensor], batch: AtomicData, step
 ) -> dict[str, float]:
     """Compute loss given a sequence of tasks
 
@@ -265,22 +265,57 @@ def compute_loss(
 
         # this is related to how Hydra outputs stuff in nested dicts:
         # ie: oc20_energy.energy
-        pred_for_task = predictions[task.name][task.property]
-        if task.level == "atom":
-            pred_for_task = pred_for_task.view(num_atoms_in_batch, -1)
-        else:
-            pred_for_task = pred_for_task.view(batch_size, -1)
+        if task.name == 'omol_energy' and task.property == 'energy':
+            
+            energy = predictions[task.name]['energy']
+            precision = predictions[task.name]['precision']
+            shape = predictions[task.name]['shape']
+            rate = predictions[task.name]['rate']
 
-        if task.level == "atom" and task.train_on_free_atoms:
-            mult_mask = free_mask & output_mask
+
+            if task.level == "atom":
+                energy = energy.view(num_atoms_in_batch, -1)
+                precision = precision.view(num_atoms_in_batch, -1)
+                shape = shape.view(num_atoms_in_batch, -1)
+                rate = rate.view(num_atoms_in_batch, -1)
+            else:
+                energy = energy.view(batch_size, -1)
+                precision = precision.view(batch_size, -1)
+                shape = shape.view(batch_size, -1)
+                rate = rate.view(batch_size, -1)
+
+            if task.level == "atom" and task.train_on_free_atoms:
+                mult_mask = free_mask & output_mask
+            else:
+                mult_mask = output_mask
+            
+            loss_dict[task.name] = task.loss_fn(
+                [energy, precision, shape, rate],
+                target,
+                mult_mask=mult_mask,
+                natoms=batch.natoms,
+                step=step,
+                )
+            
         else:
-            mult_mask = output_mask
-        loss_dict[task.name] = task.loss_fn(
-            pred_for_task,
-            target,
-            mult_mask=mult_mask,
-            natoms=batch.natoms,
-        )
+            pred_for_task = predictions[task.name][task.property]
+        
+            if task.level == "atom":
+                pred_for_task = pred_for_task.view(num_atoms_in_batch, -1)
+            else:
+                pred_for_task = pred_for_task.view(batch_size, -1)
+
+            if task.level == "atom" and task.train_on_free_atoms:
+                mult_mask = free_mask & output_mask
+            else:
+                mult_mask = output_mask
+            loss_dict[task.name] = task.loss_fn(
+                pred_for_task,
+                target,
+                mult_mask=mult_mask,
+                natoms=batch.natoms,
+                step=step,
+            )
 
     # Sanity check to make sure the compute graph is correct.
     for lc in loss_dict.values():
@@ -479,7 +514,8 @@ def set_sampler_state(state: State, epoch: int, step_start: int) -> None:
             "AtomicData sampler not found in dataloader, no dataloader state restored!!"
         )
 
-
+max_omol = torch.tensor(-999999, dtype=torch.float64)
+min_omol = torch.tensor(999999)
 class MLIPTrainEvalUnit(
     TrainUnit[AtomicData], EvalUnit[AtomicData], Stateful, Checkpointable
 ):
@@ -522,7 +558,17 @@ class MLIPTrainEvalUnit(
         # call optimizer function between wrapping in DDP
         # this is required for models that have a no_weight_decay function
         self.optimizer = _get_optimizer_wd(optimizer_fn, model)
-
+        # run_name = f"UMA {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+        # wandb_config = {}
+        # WandBSingletonLogger.init_wandb(
+        #     config=wandb_config,
+        #     run_id=job_config['timestamp_id'],
+        #     run_name=run_name,
+        #     log_dir=job_config['run_dir'],
+        #     project="UMA",
+        #     entity="04ahmdali-toronto-metropolitan-university",
+        #     #resume="allow",
+        #     )
         self.logger = (
             WandBSingletonLogger.get_instance()
             if distutils.is_master()
@@ -614,7 +660,7 @@ class MLIPTrainEvalUnit(
 
         self.cosine_lr_scheduler_fn = cosine_lr_scheduler_fn
         self.scheduler = None
-        self.lazy_state_location = None
+        self.lazy_state_location =  None
 
     def load_scheduler(self, train_dataloader_size: int) -> int:
         self.scheduler = self.cosine_lr_scheduler_fn(
@@ -675,6 +721,7 @@ class MLIPTrainEvalUnit(
         set_sampler_state(state, self.train_progress.num_epochs_completed, 0)
 
     def train_step(self, state: State, data: AtomicData) -> None:
+        global max_omol, min_omol
         try:
             device = get_device_for_local_rank()
             batch_on_device = data.to(device)
@@ -688,11 +735,15 @@ class MLIPTrainEvalUnit(
                 device_type=device,
                 enabled=self.autocast_enabled,
                 dtype=self.autocast_dtype,
-            ):
+            ): 
                 with record_function("forward"):
                     pred = self.model.forward(batch_on_device)
+                    if torch.max(pred['omol_energy']['energy']) > max_omol:
+                        max_omol = torch.max(pred['omol_energy']['energy'])
+                    if torch.min(pred['omol_energy']['energy']) < min_omol:
+                        min_omol = torch.min(pred['omol_energy']['energy'])
                 with record_function("compute_loss"):
-                    loss_dict = compute_loss(self.tasks, pred, batch_on_device)
+                    loss_dict = compute_loss(self.tasks, pred, batch_on_device, step)
             scalar_loss = sum(loss_dict.values())
             self.optimizer.zero_grad()
             with record_function("backward"):
@@ -746,6 +797,25 @@ class MLIPTrainEvalUnit(
             self.previous_wall_time = time.time()
             num_atoms_local = data.natoms.sum().item()
             num_samples_local = data.natoms.numel()
+            
+            targets = batch_on_device['omol_energy'].clone()
+            with record_function("element_refs"):
+                targets = self.tasks[1].element_references.apply_refs(batch_on_device, targets)
+            targets = self.tasks[1].normalizer.norm(targets)
+            
+            model_outputs = pred['omol_energy']
+            mu, precision_logit, shape_logit, rate_logit = model_outputs['energy']/data.natoms, model_outputs['precision']/data.natoms, model_outputs['shape']/data.natoms, model_outputs['rate']/data.natoms
+            
+            eps = 1e-6
+            lambda_param = torch.nn.functional.softplus(precision_logit) + eps
+            alpha = torch.nn.functional.softplus(shape_logit) + 1 + eps
+            beta = torch.nn.functional.softplus(rate_logit) + eps
+            
+            aleatoric_unc = beta / (alpha - 1)
+            epistemic_unc = beta / (lambda_param * (alpha - 1))
+
+            mae = torch.mean(torch.abs(mu - targets))
+
             log_dict = {
                 "train/loss": scalar_loss.item(),
                 "train/lr": self.scheduler.get_lr()[0],
@@ -759,13 +829,20 @@ class MLIPTrainEvalUnit(
                 / float(time_delta),
                 "train/num_atoms_on_rank": num_atoms_local,
                 "train/num_samples_on_rank": num_samples_local,
+                "train/mae_loss" : mae,
+                "train/max_omol_energy": max_omol,
+                "train/min_omol_energy": min_omol,
+                "train/aleatoric_uncertainty_mean": aleatoric_unc.mean().item(),
+                "train/epistemic_uncertainty_mean": epistemic_unc.mean().item(),
             }
 
             if self.logger:
                 self.logger.log(log_dict, step=step, commit=True)
 
+
             if step % self.print_every == 0:
                 logging.info(log_dict)
+
 
             self.scheduler.step()
 
@@ -964,6 +1041,8 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
         data = data.to(device)
         self.total_atoms += data.natoms.sum().item()
 
+        step = self.eval_progress.num_steps_completed
+
         if (time.time() - self.last_report) > self.report_every:
             seconds_per_step = (time.time() - self.start_time) / max(
                 1, self.eval_progress.num_steps_completed
@@ -984,7 +1063,7 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
             self.total_runtime += time.time() - t0
 
         # compute the loss
-        loss_dict = compute_loss(self.tasks, preds, data)
+        loss_dict = compute_loss(self.tasks, preds, data, step)
         total_loss = sum(loss_dict.values())
         self.total_loss_metrics += Metrics(metric=total_loss, total=total_loss, numel=1)
 
@@ -1008,7 +1087,13 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
                     running_metrics[metric_name] += current_metrics[metric_name]
 
                 self.running_metrics[task.name][dataset].update(running_metrics)
-
+                
+                if self.logger is not None:
+                    for task_name, metrics in self.eval_metrics.items():
+                        if 'per_atom_mae' in metrics:
+                            self.logger.log({
+                                    f"{task_name}/per_atom_mae": metrics['per_atom_mae'].item()
+                                    }, commit=False)
                 # update the loss metrics
                 # loss_metrics = Metrics(
                 #     metric=loss_dict[task.name], total=loss_dict[task.name], numel=1
@@ -1056,5 +1141,8 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
             f"  {k}: {log_dict[k]:.4f}\n" for k in sorted(log_dict.keys())
         )
         logging.info(f"Finished aggregating metrics: \n{log_str}")
+
+        return log_dict
+   logging.info(f"Finished aggregating metrics: \n{log_str}")
 
         return log_dict
