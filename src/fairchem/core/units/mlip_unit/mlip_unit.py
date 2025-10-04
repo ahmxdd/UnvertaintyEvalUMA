@@ -1143,6 +1143,3 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
         logging.info(f"Finished aggregating metrics: \n{log_str}")
 
         return log_dict
-   logging.info(f"Finished aggregating metrics: \n{log_str}")
-
-        return log_dict
