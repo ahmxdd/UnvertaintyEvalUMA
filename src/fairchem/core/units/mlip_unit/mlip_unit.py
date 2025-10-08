@@ -265,7 +265,7 @@ def compute_loss(
 
         # this is related to how Hydra outputs stuff in nested dicts:
         # ie: oc20_energy.energy
-        if task.name == 'omol_energy' and task.property == 'energy':
+        if (task.name == 'omol_energy' and task.property == 'energy'):
             
             energy = predictions[task.name]['energy']
             precision = predictions[task.name]['precision']
@@ -291,6 +291,37 @@ def compute_loss(
             
             loss_dict[task.name] = task.loss_fn(
                 [energy, precision, shape, rate],
+                target,
+                mult_mask=mult_mask,
+                natoms=batch.natoms,
+                step=step,
+                )
+        elif (task.name == 'forces' and task.property == 'forces'):
+            
+            forces = predictions[task.name]['forces']
+            nu = predictions[task.name]['nu']
+            alpha = predictions[task.name]['alpha']
+            beta = predictions[task.name]['beta']
+
+
+            if task.level == "atom":
+                forces = forces.view(num_atoms_in_batch, -1)
+                nu = nu.view(num_atoms_in_batch, -1)
+                alpha = alpha.view(num_atoms_in_batch, -1)
+                beta = beta.view(num_atoms_in_batch, -1)
+            else:
+                forces = forces.view(batch_size, -1)
+                nu = nu.view(batch_size, -1)
+                alpha = alpha.view(batch_size, -1)
+                beta = beta.view(batch_size, -1)
+
+            if task.level == "atom" and task.train_on_free_atoms:
+                mult_mask = free_mask & output_mask
+            else:
+                mult_mask = output_mask
+            
+            loss_dict[task.name] = task.loss_fn(
+                [forces, nu, alpha, beta],
                 target,
                 mult_mask=mult_mask,
                 natoms=batch.natoms,

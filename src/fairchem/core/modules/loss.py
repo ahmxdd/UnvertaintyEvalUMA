@@ -109,11 +109,11 @@ class DDPMTLoss(nn.Module):
 
     def per_structure(self, input, mult_mask, num_samples, loss, natoms):
         struct_idx = torch.repeat_interleave(
-            torch.arange(natoms.numel(), device=input.device), natoms
+            torch.arange(natoms.numel(), device=input[0].device), natoms
         )
         assert torch.unique(struct_idx).numel() == natoms.numel()
         per_struct_loss = torch.zeros(
-            natoms.numel(), device=input.device
+            natoms.numel(), device=input[0].device
         ).scatter_reduce(0, struct_idx, loss, reduce="sum")
 
         # normalize by the number of free atoms in the structure
@@ -264,9 +264,9 @@ class InvGammaLoss(nn.Module):
     ) -> torch.Tensor:
         
         mu = pred[0].squeeze() / natoms
-        precision = pred[1].squeeze() 
-        shape = pred[2].squeeze()
-        rate =  pred[3].squeeze()
+        precision = pred[1].squeeze() / natoms
+        shape = pred[2].squeeze() / natoms
+        rate =  pred[3].squeeze() / natoms
         target = target / natoms
 
         
@@ -327,7 +327,6 @@ class InvGammaLoss(nn.Module):
             return total_loss
 
 
-
 @registry.register_loss("l2norm")
 @registry.register_loss("l2mae")
 class L2NormLoss(nn.Module):
@@ -337,13 +336,39 @@ class L2NormLoss(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
+        self.eps = 1e-6
+        self.lambda_reg = 0.01
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step
     ) -> torch.Tensor:
+        
         assert target.dim() == 2
         assert target.shape[1] != 1
-        return torch.linalg.vector_norm(pred - target, ord=2, dim=-1)
+        mu = pred[0]
+        nu = pred[1]
+        alpha = pred[2]
+        beta =  pred[3]
+        nu = torch.nn.functional.softplus(nu) + self.eps
+        alpha = torch.nn.functional.softplus(alpha) + 1 + self.eps 
+        beta = torch.nn.functional.softplus(beta) + self.eps
+
+        term1 = 0.5 * torch.log(torch.pi / nu)
+        omega = 2 * beta * (1+nu)
+        term2 = -alpha * torch.log(omega)
+        term3 = (alpha + 0.5) * torch.log(
+            nu * ((target - mu) ** 2) + omega
+        )
+        term4 = torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
+
+        regularizer = torch.abs(target - mu) * (2 * nu + alpha)
+
+        nll = term1 + term2 + term3 + term4
+        total_loss = nll + self.lambda_reg * regularizer
+        
+        return torch.mean(total_loss)
+
+        #return torch.linalg.vector_norm(pred - target, ord=2, dim=-1)
 
 
 class DDPLoss(nn.Module):

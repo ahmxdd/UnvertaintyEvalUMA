@@ -738,8 +738,63 @@ class MLP_Energy_Head(nn.Module, HeadInterface):
             nn.SiLU(),
             nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
             nn.SiLU(),
-            nn.Linear(self.hidden_channels, 4, bias=True),
+            nn.Linear(self.hidden_channels, 1, bias=True),
         )
+
+    def forward(
+        self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        node_energy = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        ).view(-1, 1, 1)
+
+        energy_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+
+        energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
+        if gp_utils.initialized():
+            energy = gp_utils.reduce_from_model_parallel_region(energy_part)
+        else:
+            energy = energy_part
+
+        if self.reduce == "sum":
+            return {"energy": energy}
+        elif self.reduce == "mean":
+            return {"energy": energy / data_dict["natoms"]}
+        else:
+            raise ValueError(
+                f"reduce can only be sum or mean, user provided: {self.reduce}"
+            )
+
+class Evidential_MLP_Energy_Head(nn.Module, HeadInterface):
+    def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+        super().__init__()
+        self.reduce = reduce
+
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+        )
+        self.mu_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+        self.precision_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+        self.shape_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+        self.rate_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+
 
     def forward(
         self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
@@ -747,13 +802,19 @@ class MLP_Energy_Head(nn.Module, HeadInterface):
         # node_energy = self.energy_block(
         #     emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
         # ).view(-1, 1, 1)
+        
         out = self.energy_block(
              emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
         )
-        node_energy = out[:, 0].view(-1,1,1)
-        precision = out[:, 1]
-        shape = out[:, 2]
-        rate = out[:, 3]
+        node_energy = self.mu_block(out)
+        precision = self.precision_block(out)
+        shape = self.shape_block(out)
+        rate = self.rate_block(out)
+        
+        # node_energy = out[:, 0].view(-1,1,1)
+        # precision = out[:, 1]
+        # shape = out[:, 2]
+        # rate = out[:, 3]
         
         energy_part = torch.zeros(
             len(data_dict["natoms"]),
@@ -778,15 +839,15 @@ class MLP_Energy_Head(nn.Module, HeadInterface):
         
 
         energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
-        precision_part.index_add_(0, data_dict["batch"], precision)
-        shape_part.index_add_(0, data_dict["batch"], shape)
-        rate_part.index_add_(0, data_dict["batch"], rate)
+        precision_part.index_add_(0, data_dict["batch"], precision.view(-1))
+        shape_part.index_add_(0, data_dict["batch"], shape.view(-1))
+        rate_part.index_add_(0, data_dict["batch"], rate.view(-1))
         
         if gp_utils.initialized():
             energy = gp_utils.reduce_from_model_parallel_region(energy_part)
             precision_part = gp_utils.reduce_from_model_parallel_region(precision_part)
-            shape_part = gp_utils.reduce_from_model_parallel_region(precision_part)
-            rate_part = gp_utils.reduce_from_model_parallel_region(precision_part)
+            shape_part = gp_utils.reduce_from_model_parallel_region(shape_part)
+            rate_part = gp_utils.reduce_from_model_parallel_region(rate_part)
         else:
             energy = energy_part
 
@@ -813,28 +874,7 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
         node_energy = self.energy_block(
             emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
         ).view(-1, 1, 1)
-
-        energy_part = torch.zeros(
-            len(data_dict["natoms"]),
-            device=node_energy.device,
-            dtype=node_energy.dtype,
-        )
-
-        energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
-
-        if gp_utils.initialized():
-            energy = gp_utils.reduce_from_model_parallel_region(energy_part)
-        else:
-            energy = energy_part
-
-        if self.reduce == "sum":
-            return {"energy": energy}
-        elif self.reduce == "mean":
-            return {"energy": energy / data_dict["natoms"]}
-        else:
-            raise ValueError(
-                f"reduce can only be sum or mean, user provided: {self.reduce}"
-            )
+        
 
 
 class Linear_Force_Head(nn.Module, HeadInterface):
@@ -849,6 +889,37 @@ class Linear_Force_Head(nn.Module, HeadInterface):
         if gp_utils.initialized():
             forces = gp_utils.gather_from_model_parallel_region(forces, dim=0)
         return {"forces": forces}
+
+class Evidential_Force_Head(nn.Module, HeadInterface):
+    def __init__(self, backbone: eSCNMDBackbone) -> None:
+        super().__init__()
+        self.linear = SO3_Linear(backbone.sphere_channels, 1, lmax=1)
+        self.nulayer = nn.Linear(backbone.sphere_channels, 1, bias=True)
+        self.alphalayer = nn.Linear(backbone.sphere_channels, 1, bias=True)
+        self.betalayer = nn.Linear(backbone.sphere_channels, 1, bias=True)
+
+    def forward(self, data_dict: AtomicData, emb: dict[str, torch.Tensor]):
+        forces = self.linear(emb["node_embedding"].narrow(1, 0, 4))
+        forces = forces.narrow(1, 1, 3)
+        forces = forces.view(-1, 3).contiguous()
+
+        nu = self.nulayer(emb["node_embedding"].narrow(1, 0, 4))
+        nu = nu.narrow(1, 1, 3)
+        nu = nu.view(-1, 3).contiguous()
+        alpha = self.alphalayer(emb["node_embedding"].narrow(1, 0, 4))
+        alpha = alpha.narrow(1, 1, 3)
+        alpha = alpha.view(-1, 3).contiguous()
+        beta = self.betalayer(emb["node_embedding"].narrow(1, 0, 4))
+        beta = beta.narrow(1, 1, 3)
+        beta = beta.view(-1, 3).contiguous()
+
+        if gp_utils.initialized():
+            forces = gp_utils.gather_from_model_parallel_region(forces, dim=0)
+            nu = gp_utils.gather_from_model_parallel_region(nu, dim=0)
+            alpha = gp_utils.gather_from_model_parallel_region(alpha, dim=0)
+            beta = gp_utils.gather_from_model_parallel_region(beta, dim=0)
+        
+        return {"forces": forces, "nu": nu, "alpha": alpha, "beta": beta}
 
 
 def compose_tensor(
