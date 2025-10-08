@@ -71,52 +71,52 @@ omol_val:
     val:
       sample_n: 20000
       src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-    metal_ligand_ood:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/metal_ligand_ood
-    val_metal_complexes:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-      subset_to:
-        - op: in
-          metadata_key: data_ids
-          rhv:
-            - metal_complexes
-    val_electrolytes:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-      subset_to:
-        - op: in
-          metadata_key: data_ids
-          rhv:
-            - elytes
-    val_biomolecules:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-      subset_to:
-        - op: in
-          metadata_key: data_ids
-          rhv:
-            - biomolecules
-    val_spice:
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-      subset_to:
-        - op: in
-          metadata_key: data_ids
-          rhv:
-            - spice
-    val_neutralorganics:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
-      subset_to:
-        - op: in
-          metadata_key: data_ids
-          rhv:
-            - ani2x
-            - orbnet_denali
-            - geom_orca6
-            - trans1x
-            - rgd
+    # metal_ligand_ood:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/metal_ligand_ood
+    # val_metal_complexes:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
+    #   subset_to:
+    #     - op: in
+    #       metadata_key: data_ids
+    #       rhv:
+    #         - metal_complexes
+    # val_electrolytes:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
+    #   subset_to:
+    #     - op: in
+    #       metadata_key: data_ids
+    #       rhv:
+    #         - elytes
+    # val_biomolecules:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
+    #   subset_to:
+    #     - op: in
+    #       metadata_key: data_ids
+    #       rhv:
+    #         - biomolecules
+    # val_spice:
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
+    #   subset_to:
+    #     - op: in
+    #       metadata_key: data_ids
+    #       rhv:
+    #         - spice
+    # val_neutralorganics:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/val
+    #   subset_to:
+    #     - op: in
+    #       metadata_key: data_ids
+    #       rhv:
+    #         - ani2x
+    #         - orbnet_denali
+    #         - geom_orca6
+    #         - trans1x
+    #         - rgd
   format: ase_db
   a2g_args:
     molecule_cell_size: 120.0
