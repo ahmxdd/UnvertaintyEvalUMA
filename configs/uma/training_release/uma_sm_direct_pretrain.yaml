@@ -23,7 +23,7 @@ job:
   logger:
     _target_: fairchem.core.common.logger.WandBSingletonLogger.init_wandb
     _partial_: true
-    entity: fairchem
+    entity: 04ahmdali-toronto-metropolitan-university
     project: uma
 
 moe_layer_type: pytorch
@@ -31,18 +31,19 @@ num_moe_experts: 32
 max_neighbors: 30
 cutoff_radius: 6
 epochs: null
-steps: 1680000 # 140B atoms, 128 ranks, max atoms 700 (mean atoms 650)
-max_atoms: 700
+steps:  1000000 # 1680000 = 140B atoms, 128 ranks, max atoms 700 (mean atoms 650)
+max_atoms: 1050 # 700
+eval_max_atoms: 350
 bf16: True
 cpu_graph: True
 otf_graph: False
 normalizer_rmsd: 1.423
-direct_forces_coef: 30
-omc_energy_coef: 10
-omol_energy_coef: 30
-odac_energy_coef: 10
-oc20_energy_coef: 10
-omat_energy_coef: 10
+direct_forces_coef: 0
+omc_energy_coef: 0
+omol_energy_coef: 100
+odac_energy_coef: 0
+oc20_energy_coef: 0
+omat_energy_coef: 0
 
 regress_stress: False
 direct_forces: True
@@ -71,29 +72,29 @@ exclude_keys: [
 train_dataset:
   _target_: fairchem.core.datasets.mt_concat_dataset.create_concat_dataset
   dataset_configs:
-    omc: ${dataset.omc_train}
+    # omc: ${dataset.omc_train}
     omol: ${dataset.omol_train}
-    odac: ${dataset.odac_train}
-    omat: ${dataset.omat_train}
-    oc20: ${dataset.oc20_train}
+    # odac: ${dataset.odac_train}
+    # omat: ${dataset.omat_train}
+    # oc20: ${dataset.oc20_train}
   combined_dataset_config:
     sampling:
       type: explicit
       ratios:
-        omol.train: 4.0
-        oc20.train: 1.0
-        omc.train: 2.0
-        odac.train: 1.0
-        omat.train: 2.0
+        omol.train: 10.0
+        oc20.train: 0.0
+        omc.train: 0.0
+        odac.train: 0.0
+        omat.train: 0.0
 
 val_dataset:
   _target_: fairchem.core.datasets.mt_concat_dataset.create_concat_dataset
   dataset_configs:
-    omc: ${dataset.omc_val}
+    # omc: ${dataset.omc_val}
     omol: ${dataset.omol_val}
-    odac: ${dataset.odac_val}
-    omat: ${dataset.omat_val}
-    oc20: ${dataset.oc20_val}
+    # odac: ${dataset.odac_val}
+    # omat: ${dataset.omat_val}
+    # oc20: ${dataset.oc20_val}
   combined_dataset_config: { sampling: {type: temperature, temperature: 1.0} }
 
 train_dataloader:
@@ -117,7 +118,7 @@ eval_dataloader:
   batch_sampler_fn:
     _target_: fairchem.core.datasets.samplers.max_atom_distributed_sampler.MaxAtomDistributedBatchSampler
     _partial_: True
-    max_atoms: ${max_atoms}
+    max_atoms: ${eval_max_atoms}
     shuffle: False
     seed: 0
   num_workers: ${cluster.dataloader_workers}
@@ -134,11 +135,11 @@ heads:
   omc_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   omol_energy:
-    module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
+    module: fairchem.core.models.uma.escn_md.Evidential_MLP_Energy_Head
   odac_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   forces:
-    module: fairchem.core.models.uma.escn_md.Linear_Force_Head
+    module: fairchem.core.models.uma.escn_md.Evidential_Force_Head
 
 runner:
   _target_: fairchem.core.components.train.train_runner.TrainEvalRunner
@@ -170,7 +171,7 @@ runner:
     bf16: ${bf16}
   max_epochs: ${epochs}
   max_steps: ${steps}
-  evaluate_every_n_steps: 10000
+  evaluate_every_n_steps: 25000
   callbacks:
     - _target_: fairchem.core.common.profiler_utils.ProfilerCallback
       job_config: ${job}
