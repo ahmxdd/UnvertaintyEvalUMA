@@ -16,6 +16,7 @@ from torch import nn
 from fairchem.core.common import distutils, gp_utils
 from fairchem.core.common.registry import registry
 
+from fairchem.core.common.logger import WandBSingletonLogger
 
 class DDPMTLoss(nn.Module):
     """
@@ -140,24 +141,38 @@ class DDPMTLoss(nn.Module):
         target: torch.Tensor,
         mult_mask: torch.Tensor,
         natoms: torch.Tensor,
+        step
     ):
         # ensure torch doesn't do any unwanted broadcasting
         assert (
             input.shape[0] == target.shape[0] == mult_mask.shape[0]
         ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
-
+        if hasattr(self.loss_fn, 'ignore_shape_check'):
+            assert (
+                input.shape[0] == target.shape[0] == mult_mask.shape[0]
+            ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
+            if input.numel() == mult_mask.numel():
+                mult_mask = mult_mask.view(input.shape)
+            loss = (
+                self.loss_fn(
+                    input.squeeze(), torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step
+                )
+                * mult_mask
+                )
+            loss = self._reduction(input, mult_mask, loss, natoms)
+        else:
         # Ensure torch doesn't do any unwanted broadcasting
-        target = target.view(input.shape)
-        if input.numel() == mult_mask.numel():
-            mult_mask = mult_mask.view(input.shape)
+            target = target.view(input.shape)
+            if input.numel() == mult_mask.numel():
+                mult_mask = mult_mask.view(input.shape)
 
-        loss = (
-            self.loss_fn(
-                input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms
+            loss = (
+                self.loss_fn(
+                    input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms
+                )
+                * mult_mask
             )
-            * mult_mask
-        )
-        loss = self._reduction(input, mult_mask, loss, natoms)
+            loss = self._reduction(input, mult_mask, loss, natoms)
 
         # Zero out nans, if any
         found_nans_or_infs = not torch.all(loss.isfinite())
@@ -210,7 +225,7 @@ class PerAtomMAELoss(nn.Module):
         self.loss.reduction = "none"
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
     ) -> torch.Tensor:
         _natoms = torch.reshape(natoms, target.shape)
         # check if target is a scalar
@@ -218,6 +233,86 @@ class PerAtomMAELoss(nn.Module):
         # check per_atom shape
         assert (target / _natoms).shape == target.shape
         return self.loss(pred / _natoms, target / _natoms)
+    
+@registry.register_loss("hlgauss")
+class HLGaussLoss(nn.Module):
+   """
+   hl gauss loss
+   """
+
+
+   def __init__(self, min_value: float = -110.0, max_value: float = 210.0, num_bins: int = 200) -> None:
+       super().__init__()
+       #self.simpleMAEloss = nn.L1Loss()
+       # reduction should be none as it is handled in DDPLoss
+       # self.reduction = "none"
+       self.ignore_shape_check = True
+       self.min_value = min_value
+       self.max_value = max_value
+       self.num_bins = num_bins
+       self.sigma = 0.75 * ((self.max_value-self.min_value)/self.num_bins)
+       self.support = torch.linspace(
+           min_value, max_value, num_bins + 1, dtype=torch.float32 # r u sure abt this dtype ...
+       )
+       self.logger = (
+           WandBSingletonLogger.get_instance()
+       )
+
+
+   def transform_to_probs(self, target):
+       "convert scalar target to categorical distribution using Normal CDF"
+       support = self.support.to(target.device)
+       cdf_evals = torch.special.erf(
+           (support - target.unsqueeze(-1))
+           / (torch.sqrt(torch.tensor(2.0)) * self.sigma)
+           )
+
+
+       z = cdf_evals[..., -1] - cdf_evals[..., 0]
+       bin_probs = cdf_evals[..., 1:] - cdf_evals[..., :-1]
+       return bin_probs / z.unsqueeze(-1)
+      
+   def transform_from_probs(self, probs):
+       "prob to scalar"
+       support = self.support.to(probs.device)
+       centers = (support[:-1] + support[1:]) / 2
+       return torch.sum(probs * centers, dim=-1)
+
+
+   def forward(
+       self, pred, target: torch.Tensor, natoms: torch.Tensor, step
+   ) -> torch.Tensor:
+       target_per_atom = target / natoms
+       pred_per_atom = pred / natoms.shape
+       
+       target_probs = self.transform_to_probs(target_per_atom)
+
+       loss_per_sample = torch.nn.functional.cross_entropy(pred_per_atom, target_probs, reduction="none")
+
+
+       predicted_total_energy = self.transform_from_probs(torch.nn.functional.softmax(pred, dim=-1))
+       mae_total = torch.nn.functional.l1_loss(predicted_total_energy, target)
+
+       
+       absolute_errors = torch.abs(predicted_total_energy - target)
+       
+       mae_per_atom = (absolute_errors / natoms).mean()
+       #entropy of predicted distribution
+       entropy = -torch.sum(pred_probs * torch.log(pred_probs + 1e-9), dim=-1).mean()
+       loss_per_atom = (loss_per_sample / natoms).mean()
+
+       log_dict = {
+                "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(), # Average loss per sample
+                "hlgauss_loss_terms/per_atom_loss": loss_per_atom.item(),      # Average loss per atom
+                "hlgauss_loss_terms/mae_total": mae_total.item(),           # Total MAE
+                "hlgauss_loss_terms/mae_per_atom": mae_per_atom.item(),     # Per-atom MAE
+                "hlgauss_loss_terms/prediction_entropy": entropy.item(),
+                "hlgauss_loss_terms/max": torch.max(target),
+                "hlgauss_loss_terms/min": torch.min(target)
+            }
+       self.logger.log(log_dict, step=step, commit=False)
+      
+       return loss_per_sample
 
 
 @registry.register_loss("l2norm")
@@ -231,7 +326,7 @@ class L2NormLoss(nn.Module):
         super().__init__()
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
     ) -> torch.Tensor:
         assert target.dim() == 2
         assert target.shape[1] != 1

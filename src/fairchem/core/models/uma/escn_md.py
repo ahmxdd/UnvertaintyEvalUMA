@@ -804,6 +804,83 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
             raise ValueError(
                 f"reduce can only be sum or mean, user provided: {self.reduce}"
             )
+class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
+   def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+       super().__init__()
+       self.reduce = reduce
+       self.num_bins = int(200)
+       self.min_value = -110.0
+       self.max_value = 210.0
+
+       self.sphere_channels = backbone.sphere_channels
+       self.hidden_channels = backbone.hidden_channels
+       self.energy_block = nn.Sequential(
+           nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+           nn.SiLU(),
+           nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+           nn.SiLU(),
+           nn.Linear(self.hidden_channels, self.num_bins, bias=True)
+       )
+
+
+   def forward(
+       self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+   ) -> dict[str, torch.Tensor]:
+       node_logits = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+       )
+       batch_size = len(data_dict["natoms"])
+       system_logits_part = torch.zeros(
+           batch_size,
+           self.energy_block[-1].out_features,
+           device=node_logits.device,
+           dtype=node_logits.dtype,
+       )
+
+       system_logits_part.index_add_(0, data_dict["batch"], node_logits)
+      
+       if gp_utils.initialized():
+           system_logits = gp_utils.reduce_from_model_parallel_region(system_logits_part)
+       else:
+           system_logits = system_logits_part
+        
+        
+        
+      
+       def convert_logits_to_scalar(logits, v_min, v_max, n_bins):
+           probs = torch.nn.functional.softmax(logits, dim=-1)
+           support = torch.linspace(
+               v_min, v_max, n_bins + 1, device=probs.device, dtype=probs.dtype
+               )
+           centers = (support[:-1] + support[1:]) / 2
+           energy = torch.sum(probs * centers, dim=-1)
+           return energy
+       predicted_energy = convert_logits_to_scalar(
+           system_logits, 
+           self.min_value,
+           self.max_value,
+           self.num_bins
+        )
+
+       if self.reduce == "sum":
+           return {
+            "energy": {
+                "logits": system_logits,
+                "energy": predicted_energy
+            }
+        }
+       elif self.reduce == "mean":
+           return {
+               
+            "energy": { 
+                "logits": system_logits / data_dict["natoms"],
+                "energy": predicted_energy / data_dict["natoms"]
+            }
+        }
+       else:
+           raise ValueError(
+               f"reduce can only be sum or mean, user provided: {self.reduce}"
+           )
 
 
 class Linear_Force_Head(nn.Module, HeadInterface):

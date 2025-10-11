@@ -223,7 +223,7 @@ def get_output_masks(
 
 
 def compute_loss(
-    tasks: Sequence[Task], predictions: dict[str, torch.Tensor], batch: AtomicData
+    tasks: Sequence[Task], predictions: dict[str, torch.Tensor], batch: AtomicData, step
 ) -> dict[str, float]:
     """Compute loss given a sequence of tasks
 
@@ -265,22 +265,46 @@ def compute_loss(
 
         # this is related to how Hydra outputs stuff in nested dicts:
         # ie: oc20_energy.energy
-        pred_for_task = predictions[task.name][task.property]
-        if task.level == "atom":
-            pred_for_task = pred_for_task.view(num_atoms_in_batch, -1)
-        else:
-            pred_for_task = pred_for_task.view(batch_size, -1)
+        if task.name == 'omol_energy' and task.property == "energy":
+            energy_pred = predictions["omol_energy"]["energy"]["energy"]
+            energy_logits = predictions["omol_energy"]["energy"]["logits"]
 
-        if task.level == "atom" and task.train_on_free_atoms:
-            mult_mask = free_mask & output_mask
+            if task.level == "atom":
+                energy_pred = energy_pred.view(num_atoms_in_batch, -1)
+                energy_logits = energy_logits.view(num_atoms_in_batch, -1)
+            else:
+                energy_pred = energy_pred.view(batch_size, -1)
+                energy_logits = energy_logits.view(batch_size, -1)
+
+            if task.level == "atom" and task.train_on_free_atoms:
+                mult_mask = free_mask & output_mask
+            else:
+                mult_mask = output_mask
+            loss_dict[task.name] = task.loss_fn(
+                energy_logits,
+                target,
+                mult_mask=mult_mask,
+                natoms=batch.natoms,
+                step=step
+            )
         else:
-            mult_mask = output_mask
-        loss_dict[task.name] = task.loss_fn(
-            pred_for_task,
-            target,
-            mult_mask=mult_mask,
-            natoms=batch.natoms,
-        )
+            pred_for_task = predictions[task.name][task.property]
+            if task.level == "atom":
+                pred_for_task = pred_for_task.view(num_atoms_in_batch, -1)
+            else:
+                pred_for_task = pred_for_task.view(batch_size, -1)
+
+            if task.level == "atom" and task.train_on_free_atoms:
+                mult_mask = free_mask & output_mask
+            else:
+                mult_mask = output_mask
+            loss_dict[task.name] = task.loss_fn(
+                pred_for_task,
+                target,
+                mult_mask=mult_mask,
+                natoms=batch.natoms,
+                step=step
+            )
 
     # Sanity check to make sure the compute graph is correct.
     for lc in loss_dict.values():
@@ -692,7 +716,7 @@ class MLIPTrainEvalUnit(
                 with record_function("forward"):
                     pred = self.model.forward(batch_on_device)
                 with record_function("compute_loss"):
-                    loss_dict = compute_loss(self.tasks, pred, batch_on_device)
+                    loss_dict = compute_loss(self.tasks, pred, batch_on_device, step)
             scalar_loss = sum(loss_dict.values())
             self.optimizer.zero_grad()
             with record_function("backward"):
@@ -984,7 +1008,7 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
             self.total_runtime += time.time() - t0
 
         # compute the loss
-        loss_dict = compute_loss(self.tasks, preds, data)
+        loss_dict = compute_loss(self.tasks, preds, data, step)
         total_loss = sum(loss_dict.values())
         self.total_loss_metrics += Metrics(metric=total_loss, total=total_loss, numel=1)
 

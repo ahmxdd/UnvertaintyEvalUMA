@@ -32,7 +32,7 @@
   loss_fn:
     _target_: fairchem.core.modules.loss.DDPMTLoss
     loss_fn:
-      _target_: fairchem.core.modules.loss.PerAtomMAELoss
+      _target_: fairchem.core.modules.loss.HLGaussLoss
     coefficient: ${omol_energy_coef}
   out_spec:
     dim: [1]
