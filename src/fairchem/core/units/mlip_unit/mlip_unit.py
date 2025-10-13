@@ -987,6 +987,9 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
         device = get_device_for_local_rank()
         data = data.to(device)
         self.total_atoms += data.natoms.sum().item()
+        # debug asap please please pretty please. step must be defined
+        step = self.train_progress.num_steps_completed
+
 
         if (time.time() - self.last_report) > self.report_every:
             seconds_per_step = (time.time() - self.start_time) / max(

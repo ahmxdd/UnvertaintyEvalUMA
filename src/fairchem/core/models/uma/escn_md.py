@@ -809,8 +809,8 @@ class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
        super().__init__()
        self.reduce = reduce
        self.num_bins = int(200)
-       self.min_value = -110.0
-       self.max_value = 210.0
+       self.min_value = -100.0
+       self.max_value = 100.0
 
        self.sphere_channels = backbone.sphere_channels
        self.hidden_channels = backbone.hidden_channels
@@ -830,51 +830,48 @@ class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
             emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
        )
        batch_size = len(data_dict["natoms"])
-       system_logits_part = torch.zeros(
-           batch_size,
-           self.energy_block[-1].out_features,
+       node_probs = torch.nn.functional.softmax(node_logits, dim=-1)
+       energy_molecule_probs = torch.zeros(
+           (batch_size, 200),
            device=node_logits.device,
            dtype=node_logits.dtype,
        )
 
-       system_logits_part.index_add_(0, data_dict["batch"], node_logits)
-      
-       if gp_utils.initialized():
-           system_logits = gp_utils.reduce_from_model_parallel_region(system_logits_part)
-       else:
-           system_logits = system_logits_part
-        
-        
-        
-      
+       energy_molecule = torch.zeros(batch_size,device=node_logits.device,dtype=node_logits.dtype)
+       
+       
        def convert_logits_to_scalar(logits, v_min, v_max, n_bins):
            probs = torch.nn.functional.softmax(logits, dim=-1)
            support = torch.linspace(
                v_min, v_max, n_bins + 1, device=probs.device, dtype=probs.dtype
                )
+           
            centers = (support[:-1] + support[1:]) / 2
            energy = torch.sum(probs * centers, dim=-1)
            return energy
-       predicted_energy = convert_logits_to_scalar(
-           system_logits, 
-           self.min_value,
-           self.max_value,
-           self.num_bins
-        )
+       
+       energy_per_atom = convert_logits_to_scalar(node_logits, self.min_value,self.max_value,self.num_bins)
+       energy_molecule.index_add_(0, data_dict["batch"], energy_per_atom)
+       energy_molecule_probs.index_add_(0, data_dict["batch"], node_probs)
+
+       if gp_utils.initialized():
+           energy_molecule = gp_utils.reduce_from_model_parallel_region(energy_molecule)
+       else:
+           energy_molecule = energy_molecule
 
        if self.reduce == "sum":
            return {
             "energy": {
-                "logits": system_logits,
-                "energy": predicted_energy
+                "logits": energy_molecule_probs,
+                "energy": energy_molecule
             }
         }
        elif self.reduce == "mean":
            return {
                
             "energy": { 
-                "logits": system_logits / data_dict["natoms"],
-                "energy": predicted_energy / data_dict["natoms"]
+                "logits": energy_molecule_probs,
+                "energy": energy_molecule / data_dict["natoms"]
             }
         }
        else:

@@ -234,14 +234,14 @@ class PerAtomMAELoss(nn.Module):
         assert (target / _natoms).shape == target.shape
         return self.loss(pred / _natoms, target / _natoms)
     
-@registry.register_loss("hlgauss")
-class HLGaussLoss(nn.Module):
+@registry.register_loss("hlgaussl1")
+class HLGaussLossL1(nn.Module):
    """
    hl gauss loss
    """
 
 
-   def __init__(self, min_value: float = -110.0, max_value: float = 210.0, num_bins: int = 200) -> None:
+   def __init__(self, min_value: float = -1.0, max_value: float = 1.0, num_bins: int = 200) -> None:
        super().__init__()
        #self.simpleMAEloss = nn.L1Loss()
        # reduction should be none as it is handled in DDPLoss
@@ -252,7 +252,7 @@ class HLGaussLoss(nn.Module):
        self.num_bins = num_bins
        self.sigma = 0.75 * ((self.max_value-self.min_value)/self.num_bins)
        self.support = torch.linspace(
-           min_value, max_value, num_bins + 1, dtype=torch.float32 # r u sure abt this dtype ...
+           min_value, max_value, num_bins + 1, dtype=torch.float32 
        )
        self.logger = (
            WandBSingletonLogger.get_instance()
@@ -282,37 +282,119 @@ class HLGaussLoss(nn.Module):
    def forward(
        self, pred, target: torch.Tensor, natoms: torch.Tensor, step
    ) -> torch.Tensor:
-       target_per_atom = target / natoms
-       pred_per_atom = pred / natoms.shape
        
+       _natoms = torch.reshape(natoms, target.shape)
+       target_per_atom = target / _natoms
+       pred_per_atom = pred / _natoms
+       return torch.nn.functional.l1_loss(target_per_atom, pred_per_atom)
+       
+
+@registry.register_loss("hlgaussCE")
+class HLGaussLossCE(nn.Module):
+   """
+   hl gauss loss
+   """
+
+
+   def __init__(self) -> None:
+       super().__init__()
+       #self.simpleMAEloss = nn.L1Loss()
+       # reduction should be none as it is handled in DDPLoss
+       # self.reduction = "none"
+       self.ignore_shape_check = True
+    #    self.min_value = min_value
+    #    self.max_value = max_value
+    #    self.num_bins = num_bins
+    #    self.sigma = 0.75 * ((self.max_value-self.min_value)/self.num_bins)
+    #    self.support = torch.linspace(
+    #        min_value, max_value, num_bins + 1, dtype=torch.float32 
+    #    )
+       self.min_value = -100.0
+       self.max_value = 100.0
+       start_exp = -2
+       end_exp = 2
+       num_points_per_side = 100
+       positive_part = torch.logspace(start_exp, end_exp, num_points_per_side)
+       negative_part = -torch.flip(positive_part, dims=[0])
+       self.support = torch.cat((negative_part, torch.tensor([0.0]), positive_part))
+       self.num_bins = len(self.support) - 1
+       self.sigma = 0.75 * ((torch.max(self.support) - torch.min(self.support)) / self.num_bins)
+       self.logger = (
+           WandBSingletonLogger.get_instance()
+       )
+       
+
+
+   def transform_to_probs(self, target):
+       "convert scalar target to categorical distribution using Normal CDF"
+       support = self.support.to(target.device)
+       target = target.unsqueeze(-1)
+
+       cdf_evals = 0.5 * (1 + torch.special.erf(
+        (support - target) / (self.sigma * (2**0.5))
+    ))
+       z = cdf_evals[..., -1] - cdf_evals[..., 0]
+       bin_probs = cdf_evals[..., 1:] - cdf_evals[..., :-1]
+       return bin_probs / z.unsqueeze(-1)
+      
+   def transform_from_probs(self, probs):
+       "prob to scalar"
+       support = self.support.to(probs.device)
+       centers = (support[:-1] + support[1:]) / 2
+       return torch.sum(probs * centers, dim=-1)
+
+
+   def forward(
+       self, pred, target: torch.Tensor, natoms: torch.Tensor, step
+   ) -> torch.Tensor:
+       
+       _natoms = torch.reshape(natoms, target.shape)
+
+
+       target_per_atom = target / _natoms
+       target_per_atom = torch.clamp(target_per_atom, self.min_value, self.max_value)
+       
+       
+       pred_per_atom = pred / torch.unsqueeze(_natoms, -1)
+       
+
+       
+   
        target_probs = self.transform_to_probs(target_per_atom)
-
-       loss_per_sample = torch.nn.functional.cross_entropy(pred_per_atom, target_probs, reduction="none")
-
-
-       predicted_total_energy = self.transform_from_probs(torch.nn.functional.softmax(pred, dim=-1))
-       mae_total = torch.nn.functional.l1_loss(predicted_total_energy, target)
-
+       log_pred_per_atom = torch.log(pred_per_atom + 1e-9)
+       loss = torch.nn.functional.kl_div(log_pred_per_atom, target_probs, reduction='batchmean')
+       mae = torch.abs((self.transform_from_probs(pred)/_natoms) - target_per_atom).mean()
+    #    entropy = -torch.sum((self.transform_from_probs(pred)) * torch.log((self.transform_from_probs(pred)) + 1e-9), dim=-1).mean()
        
-       absolute_errors = torch.abs(predicted_total_energy - target)
+
+
+       #loss_per_sample = torch.nn.functional.cross_entropy(pred_per_atom, target_probs, reduction="none")
        
-       mae_per_atom = (absolute_errors / natoms).mean()
-       #entropy of predicted distribution
-       entropy = -torch.sum(pred_probs * torch.log(pred_probs + 1e-9), dim=-1).mean()
-       loss_per_atom = (loss_per_sample / natoms).mean()
+
+    #    predicted_total_energy = self.transform_from_probs(torch.nn.functional.softmax(pred, dim=-1))
+    #    mae_total = torch.nn.functional.l1_loss(predicted_total_energy, target)
+       
+       
+    #    absolute_errors = torch.abs(predicted_total_energy - target)
+       
+    #    mae_per_atom = (absolute_errors / natoms).mean()
+    #    #entropy of predicted distribution
+    #    pred_probs = torch.nn.functional.softmax(pred, dim=-1)
+    #    entropy = -torch.sum(pred_probs * torch.log(pred_probs + 1e-9), dim=-1).mean()
+    #    loss_per_atom = (loss_per_sample / natoms).mean()
 
        log_dict = {
-                "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(), # Average loss per sample
-                "hlgauss_loss_terms/per_atom_loss": loss_per_atom.item(),      # Average loss per atom
-                "hlgauss_loss_terms/mae_total": mae_total.item(),           # Total MAE
-                "hlgauss_loss_terms/mae_per_atom": mae_per_atom.item(),     # Per-atom MAE
-                "hlgauss_loss_terms/prediction_entropy": entropy.item(),
-                "hlgauss_loss_terms/max": torch.max(target),
-                "hlgauss_loss_terms/min": torch.min(target)
+                "hlgauss_loss_terms/total_loss": loss.mean().item(), # Average loss per sample
+                # "hlgauss_loss_terms/per_atom_loss": loss_per_atom.item(),      # Average loss per atom
+                # "hlgauss_loss_terms/mae_total": mae_total.item(),           # Total MAE
+                # "hlgauss_loss_terms/mae_per_atom": mae_per_atom.item(),     # Per-atom MAE
+                # "hlgauss_loss_terms/prediction_entropy": torch.mean(entropy),
+                "hlgauss_loss_terms/max": torch.max(target_per_atom),
+                "hlgauss_loss_terms/min": torch.min(target_per_atom),
+                "hlgauss_loss_terms/per_atom_mae": mae,
             }
-       self.logger.log(log_dict, step=step, commit=False)
-      
-       return loss_per_sample
+       self.logger.log(log_dict, step=step, commit=False)  
+       return loss
 
 
 @registry.register_loss("l2norm")
