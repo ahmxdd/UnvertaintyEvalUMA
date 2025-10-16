@@ -311,6 +311,7 @@ class Submitit(Checkpointable):
             simple_config = OmegaConf.to_container(
                 self.config, resolve=True, throw_on_missing=True
             )
+            print("Job Name: ", self.config.job.run_name)
             logger_initializer(
                 config=simple_config,
                 run_id=self.config.job.timestamp_id,

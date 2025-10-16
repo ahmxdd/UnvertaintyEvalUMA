@@ -354,7 +354,11 @@ def compute_metrics(
         return {metric_name: Metrics() for metric_name in task.metrics}
 
     target_masked = batch[task.name][output_mask]
-    pred = predictions[task.name][task.property].clone()
+    if task.name == 'omol_energy' and task.property == "energy":
+        pred = predictions[task.name][task.property]["energy"].clone()  # Get energy prediction
+    else:
+        pred = predictions[task.name][task.property].clone()
+    #pred = predictions[task.name][task.property].clone()
     # denormalize the prediction
     pred = task.normalizer.denorm(pred)
     # undo element references for energy tasks
@@ -988,7 +992,7 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
         data = data.to(device)
         self.total_atoms += data.natoms.sum().item()
         # debug asap please please pretty please. step must be defined
-        step = self.train_progress.num_steps_completed
+        step = self.eval_progress.num_steps_completed
 
 
         if (time.time() - self.last_report) > self.report_every:

@@ -804,13 +804,131 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
             raise ValueError(
                 f"reduce can only be sum or mean, user provided: {self.reduce}"
             )
-class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
+        
+
+class HL_Gauss_Energy_Head_Hierarchal(nn.Module, HeadInterface):
    def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
        super().__init__()
        self.reduce = reduce
        self.num_bins = int(200)
-       self.min_value = -100.0
-       self.max_value = 100.0
+       self.num_fine_bins = 20
+
+       log_min = -2
+       log_max = 2
+       
+
+       self.sphere_channels = backbone.sphere_channels
+       self.hidden_channels = backbone.hidden_channels
+       self.energy_block = nn.Sequential(
+           nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+           nn.SiLU(),
+           nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+           nn.SiLU()
+       
+       )
+       self.coarse_energy_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, self.num_bins, bias=True),
+        )
+       self.fine_energy_block = nn.Sequential(
+            nn.Linear(self.hidden_channels, self.num_fine_bins, bias=True),
+        )
+       
+       num_points_per_side = self.num_bins // 2
+       positive_part = torch.logspace(log_min, log_max, num_points_per_side)
+       negative_part = -torch.flip(positive_part, dims=[0])
+       coarse_support = torch.cat((negative_part, torch.tensor([0.0]), positive_part))
+       self.register_buffer("coarse_support", coarse_support)
+       
+       fine_support = torch.linspace(0.0, 1.0, self.num_fine_bins + 1)
+       self.register_buffer("fine_support", fine_support)
+       fine_centers = (fine_support[:-1] + fine_support[1:]) / 2
+       self.register_buffer("fine_centers", fine_centers)
+
+
+
+   def forward(
+       self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+   ) -> dict[str, torch.Tensor]:
+       node_logits_combined = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+       )
+       coarse_node_logits = self.coarse_energy_block(node_logits_combined)
+       fine_node_logits = self.fine_energy_block(node_logits_combined)
+
+       
+       batch_size = len(data_dict["natoms"])
+       batch_idx = data_dict["batch"]
+
+       coarse_mol_logits_part = torch.zeros(
+            (batch_size, self.num_bins),
+            device=coarse_node_logits.device,
+            dtype=coarse_node_logits.dtype,
+        )
+       fine_mol_logits_part = torch.zeros(
+            (batch_size, self.num_fine_bins),
+            device=fine_node_logits.device,
+            dtype=fine_node_logits.dtype,
+        )
+       
+       coarse_mol_logits_part.index_add_(0, batch_idx, coarse_node_logits)
+       fine_mol_logits_part.index_add_(0, batch_idx, fine_node_logits)
+
+       if gp_utils.initialized():
+            coarse_mol_logits = gp_utils.reduce_from_model_parallel_region(coarse_mol_logits_part)
+            fine_mol_logits = gp_utils.reduce_from_model_parallel_region(fine_mol_logits_part)
+       else:
+            coarse_mol_logits = coarse_mol_logits_part
+            fine_mol_logits = fine_mol_logits_part
+
+       coarse_mol_probs = torch.nn.functional.softmax(coarse_mol_logits, dim=-1)
+       fine_mol_probs = torch.nn.functional.softmax(fine_mol_logits, dim=-1)
+
+       
+
+
+       coarse_bin_indices = torch.argmax(coarse_mol_probs, dim=-1)
+       v_start = self.coarse_support[coarse_bin_indices]
+       v_end = self.coarse_support[coarse_bin_indices + 1]
+       bin_width = v_end - v_start
+       
+       fine_scale_pos = torch.sum(fine_mol_probs * self.fine_centers.to(fine_mol_probs.device), dim=-1)
+       
+       energy_molecule = v_start + (fine_scale_pos * bin_width)
+       
+       all_mol_logits = torch.cat([coarse_mol_logits, fine_mol_logits], dim=1)
+
+
+       if self.reduce == "sum":
+           return {
+            "energy": {
+                "logits": all_mol_logits,
+                "energy": energy_molecule
+            }
+        }
+       elif self.reduce == "mean":
+           return {
+               
+            "energy": { 
+                "logits": all_mol_logits,
+                "energy": energy_molecule / data_dict["natoms"]
+            }
+        }
+       else:
+           raise ValueError(
+               f"reduce can only be sum or mean, user provided: {self.reduce}"
+           )
+
+class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
+   def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+       super().__init__()
+       self.reduce = reduce
+
+       self.min_value = -10.0
+       self.max_value = 20.0
+       self.num_bins = 100
+       bin_width = (self.max_value - self.min_value) / self.num_bins
+       self.sigma = 0.75 * bin_width
+
 
        self.sphere_channels = backbone.sphere_channels
        self.hidden_channels = backbone.hidden_channels
@@ -823,6 +941,8 @@ class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
        )
 
 
+
+
    def forward(
        self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
    ) -> dict[str, torch.Tensor]:
@@ -830,55 +950,163 @@ class HL_Gauss_Energy_Head(nn.Module, HeadInterface):
             emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
        )
        batch_size = len(data_dict["natoms"])
-       node_probs = torch.nn.functional.softmax(node_logits, dim=-1)
-       energy_molecule_probs = torch.zeros(
-           (batch_size, 200),
+       system_logits_part = torch.zeros(
+           batch_size,
+           self.energy_block[-1].out_features,
            device=node_logits.device,
            dtype=node_logits.dtype,
        )
-
-       energy_molecule = torch.zeros(batch_size,device=node_logits.device,dtype=node_logits.dtype)
-       
-       
-       def convert_logits_to_scalar(logits, v_min, v_max, n_bins):
+       def convert_logits_to_scalar(logits):
            probs = torch.nn.functional.softmax(logits, dim=-1)
            support = torch.linspace(
-               v_min, v_max, n_bins + 1, device=probs.device, dtype=probs.dtype
-               )
-           
+               self.min_value, self.max_value, self.num_bins + 1, device=probs.device, dtype=probs.dtype
+           )
            centers = (support[:-1] + support[1:]) / 2
            energy = torch.sum(probs * centers, dim=-1)
            return energy
        
-       energy_per_atom = convert_logits_to_scalar(node_logits, self.min_value,self.max_value,self.num_bins)
-       energy_molecule.index_add_(0, data_dict["batch"], energy_per_atom)
-       energy_molecule_probs.index_add_(0, data_dict["batch"], node_probs)
+       energy_per_atom = convert_logits_to_scalar(node_logits)
+       energy_molecule = torch.zeros(len(data_dict["natoms"]),
+                                     device = node_logits.device,
+                                     dtype=node_logits.dtype)
 
+
+       system_logits_part.index_add_(0, data_dict["batch"], torch.nn.functional.softmax(node_logits, dim=-1))
+       energy_molecule.index_add(0, data_dict["batch"], energy_per_atom)
+      
        if gp_utils.initialized():
-           energy_molecule = gp_utils.reduce_from_model_parallel_region(energy_molecule)
+           system_logits = gp_utils.reduce_from_model_parallel_region(system_logits_part)
+
        else:
-           energy_molecule = energy_molecule
+           system_logits = system_logits_part
 
        if self.reduce == "sum":
-           return {
-            "energy": {
-                "logits": energy_molecule_probs,
-                "energy": energy_molecule
-            }
-        }
+           return {"energy" : {"energy": energy_molecule, "logits": system_logits}}
        elif self.reduce == "mean":
-           return {
-               
-            "energy": { 
-                "logits": energy_molecule_probs,
-                "energy": energy_molecule / data_dict["natoms"]
-            }
-        }
+           return {"energy" : {"energy": energy_molecule/ data_dict["natoms"], "logits": system_logits/ data_dict["natoms"]}}
        else:
            raise ValueError(
                f"reduce can only be sum or mean, user provided: {self.reduce}"
            )
+class HL_Gauss_Energy_Head_Log(nn.Module, HeadInterface): # Renamed for clarity
+    def __init__(self, backbone, reduce: str = "sum") -> None:
+        super().__init__()
+        self.reduce = reduce
+        
+        start_exp = -4  
+        end = 20
+        num_points_per_side = 16
+        
+        positive_part = torch.logspace(start_exp, torch.log10(torch.tensor(end)), num_points_per_side, base=2)
+        negative_part = -torch.flip(positive_part, dims=[0])
+        self.support = torch.cat((negative_part[:-1], torch.tensor([0.0]), positive_part))
+        
+        self.num_bins = len(self.support) - 1
 
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.num_bins, bias=True) # Output size matches num_bins
+        )
+
+    def forward(self, data_dict, emb):
+        node_logits = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        )
+
+        # 2. Sum the raw logits to get a single logit vector per molecule
+        batch_size = len(data_dict["natoms"])
+
+        system_logits_part = torch.zeros(
+            (batch_size, self.num_bins),
+            device=node_logits.device,
+            dtype=node_logits.dtype,
+        )
+        system_logits_part.index_add_(0, data_dict["batch"], torch.nn.functional.softmax(node_logits, dim=-1))
+
+        if gp_utils.initialized():
+            system_logits = gp_utils.reduce_from_model_parallel_region(system_logits_part)
+        else:
+            system_logits = system_logits_part
+        
+        # Helper function to get energy for logging/inference
+        def convert_logits_to_scalar(logits):
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+            support = self.support.to(probs.device)
+            centers = (support[:-1] + support[1:]) / 2
+            energy = torch.sum(probs * centers, dim=-1)
+            return energy
+
+        energy_per_atom = convert_logits_to_scalar(node_logits)
+        energy_molecule = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_logits.device,
+            dtype=node_logits.dtype,
+        )
+        energy_molecule.index_add(0, data_dict["batch"], energy_per_atom)
+
+        # 4. Match EXACT output structure of linear head
+        if self.reduce == "sum":
+            return {"energy" : {"energy": energy_molecule, "logits": system_logits}}
+        elif self.reduce == "mean":
+            return {"energy" : {
+                "energy": energy_molecule / data_dict["natoms"], 
+                "logits": system_logits / data_dict["natoms"]
+            }}
+
+class l1SeparateBins(nn.Module, HeadInterface):
+   def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+       super().__init__()
+       self.reduce = reduce
+       self.sphere_channels = backbone.sphere_channels
+       self.hidden_channels = backbone.hidden_channels
+       self.energy_block = nn.Sequential(
+           nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+           nn.SiLU(),
+           nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+           nn.SiLU(),
+       )
+       self.molecule_block = nn.Sequential(
+           nn.Linear(self.hidden_channels, 4*self.hidden_channels, bias=True),
+           nn.SiLU(),
+           nn.Linear(4*self.hidden_channels, 1, bias=True)
+       )
+   def forward(
+       self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+   ) -> dict[str, torch.Tensor]:
+       # per atom energy features (4 * 128)
+       node_energy = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        )
+       
+       batch_size = len(data_dict["natoms"])
+       molecule_features = torch.zeros(
+           batch_size, self.hidden_channels,
+           device=node_energy.device,
+           dtype=node_energy.dtype,
+       )
+       molecule_features.index_add_(0, data_dict["batch"], node_energy)
+       molecule_features = molecule_features / data_dict["natoms"].unsqueeze(1)
+
+       scalar_energy = self.molecule_block(
+           molecule_features
+       ).squeeze(-1)
+       
+       if gp_utils.initialized():
+            scalar_energy = gp_utils.reduce_from_model_parallel_region(scalar_energy)
+
+       if self.reduce == "sum":
+           return {"energy" : {"energy": scalar_energy, "logits": scalar_energy}}
+       elif self.reduce == "mean":
+           return {"energy" : {"energy": scalar_energy, "logits": scalar_energy/ data_dict["natoms"]}}
+       else:
+           raise ValueError(
+               f"reduce can only be sum or mean, user provided: {self.reduce}"
+           )
 
 class Linear_Force_Head(nn.Module, HeadInterface):
     def __init__(self, backbone: eSCNMDBackbone) -> None:
