@@ -167,7 +167,7 @@ runner:
       epochs: ${epochs}
       steps: ${steps}
     print_every: 25
-    clip_grad_norm: 100
+    clip_grad_norm: 100 #we tried 20
     bf16: ${bf16}
   max_epochs: ${epochs}
   max_steps: ${steps}
@@ -176,5 +176,5 @@ runner:
     - _target_: fairchem.core.common.profiler_utils.ProfilerCallback
       job_config: ${job}
     - _target_: fairchem.core.components.train.train_runner.TrainCheckpointCallback
-      checkpoint_every_n_steps: 100000
+      checkpoint_every_n_steps: 10000
       max_saved_checkpoints: 5

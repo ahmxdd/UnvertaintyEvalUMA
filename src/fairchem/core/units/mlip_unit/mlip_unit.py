@@ -837,20 +837,42 @@ class MLIPTrainEvalUnit(
 
     def load_state_dict(self, state_dict: dict[str, Any]):
         # sets our state dicts on the model and optimizer, now that we've loaded
-        set_state_dict(
-            self.model,
-            self.optimizer,
-            model_state_dict=state_dict["model"],
-            optim_state_dict=state_dict["optim"],
+
+        model_state_dict = {
+            "module." + k: v for k, v in state_dict["model"].items()
+            }
+
+        self.model.load_state_dict(
+            state_dict=model_state_dict,
+            strict=True
         )
+        self.optimizer.load_state_dict(
+            state_dict=state_dict["optim"],
+            #strict=False
+        )
+        # set_state_dict(
+        #     self.model,
+        #     self.optimizer,
+        #     model_state_dict=state_dict["model"],
+        #     optim_state_dict=state_dict["optim"],
+        # )
         self.train_progress.load_state_dict(state_dict["progress"])
         self.scheduler.load_state_dict(state_dict["scheduler"])
         if self.ema_model is not None:
-            set_model_state_dict(
-                self.ema_model,
-                model_state_dict=state_dict["ema"],
-            )
-            self.ema_model.load_state_dict(state_dict["ema"])
+            ema_state_dict = {
+                "module." + k if k != 'n_averaged' else k: v 
+                for k, v in state_dict["ema"].items()
+            }
+
+            # set_model_state_dict(
+            #     self.ema_model,
+            #     model_state_dict=state_dict["ema"],
+            # )
+            # self.ema_model.load_state_dict(state_dict["ema"])
+            self.ema_model.load_state_dict(
+                state_dict=ema_state_dict,
+                strict=True
+                )
 
     def eval_step(self, state: State, data: AtomicData) -> None:
         self.eval_unit.eval_step(state, data)

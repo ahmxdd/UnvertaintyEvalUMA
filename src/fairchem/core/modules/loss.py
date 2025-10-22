@@ -475,22 +475,44 @@ class HLGaussLossLinear(nn.Module):
         clamped_target = torch.clamp(target_per_atom, self.min_value, self.max_value)
         
         target_probs = self.transform_to_probs(clamped_target, support)
-        
-        log_pred_probs = torch.log(pred / natoms.unsqueeze(1))
-        loss_per_sample = torch.nn.functional.kl_div(
-            log_pred_probs, target_probs, reduction="none"
-        ).sum(dim=1)
+        pred_probs_normalized = pred / natoms.unsqueeze(1)
 
-        mae = torch.abs((self.transform_from_probs(pred / natoms.unsqueeze(1), support) - target_per_atom)).mean()
+        target_probs_stable = target_probs + 1e-12
+        pred_probs_stable = pred_probs_normalized + 1e-12
+        log_pred_probs = torch.log(pred_probs_stable)
+        
+        loss_per_sample = torch.nn.functional.kl_div(
+            log_pred_probs, target_probs_stable, reduction="none"
+            ).sum(dim=1)
+        
+        pred_scalar = self.transform_from_probs(pred_probs_normalized, support)
+        prediction_error = pred_scalar - target_per_atom
+        mae = torch.abs(prediction_error).mean()
+        mean_error_bias = prediction_error.mean() # New: Logs prediction bias
+        pred_scalar_std = pred_scalar.std()        # New: Logs variance of predictions
+        target_scalar_std = target_per_atom.std()  # New: Logs variance of targets
+        target_entropy = torch.distributions.Categorical(probs=target_probs_stable).entropy().mean() # Requested
+        pred_entropy = torch.distributions.Categorical(probs=pred_probs_stable).entropy().mean()   # New: Tracks model confidence
+
+        #mae = torch.abs((self.transform_from_probs(pred / natoms.unsqueeze(1), support) - target_per_atom)).mean()
 
         log_dict = {
-                "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(),
-                "hlgauss_loss_terms/exact_mae": mae.item(),
-                "hlgauss_loss_terms/target_max": torch.max(target_per_atom).item(),
-                "hlgauss_loss_terms/target_min": torch.min(target_per_atom).item(),
+            "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(),
+            "hlgauss_loss_terms/exact_mae": mae.item(),
+            "hlgauss_loss_terms/target_max": torch.max(target_per_atom).item(),
+            "hlgauss_loss_terms/target_min": torch.min(target_per_atom).item(),
+            
+            "hlgauss_diagnostics/target_entropy": target_entropy.item(),
+            "hlgauss_diagnostics/pred_entropy": pred_entropy.item(),
+            "hlgauss_diagnostics/mean_error_bias": mean_error_bias.item(),
+            "hlgauss_diagnostics/target_scalar_std": target_scalar_std.item(),
+            "hlgauss_diagnostics/pred_scalar_std": pred_scalar_std.item()
             }
-        self.logger.log(log_dict, step=step, commit=False)  
-        return loss_per_sample.mean()
+        self.logger.log(log_dict, step=step, commit=False)
+        if torch.isnan(loss_per_sample).any():
+            print("NaN detected in loss_per_sample")
+
+        return loss_per_sample
 
 @registry.register_loss("HLGaussLossCE_Log")
 class HLGaussLossCE_Log(nn.Module): # Renamed for clarity
