@@ -805,6 +805,52 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
                 f"reduce can only be sum or mean, user provided: {self.reduce}"
             )
 
+class Symp_MLP_Energy_Head(nn.Module, HeadInterface):
+    def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+        super().__init__()
+        self.reduce = reduce
+
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+
+    def forward(
+        self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        node_energy = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        ).view(-1, 1, 1)
+
+        energy_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+
+        energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
+        
+        symexp = lambda x: torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
+        energy_expanded = symexp(energy_part)
+        
+        if gp_utils.initialized():
+            energy = gp_utils.reduce_from_model_parallel_region(energy_expanded)
+        else:
+            energy = energy_expanded
+
+        if self.reduce == "sum":
+            return {"energy": energy}
+        elif self.reduce == "mean":
+            return {"energy": energy / data_dict["natoms"]}
+        else:
+            raise ValueError(
+                f"reduce can only be sum or mean, user provided: {self.reduce}"
+            )
 
 class Linear_Force_Head(nn.Module, HeadInterface):
     def __init__(self, backbone: eSCNMDBackbone) -> None:

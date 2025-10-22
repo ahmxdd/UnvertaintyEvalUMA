@@ -218,6 +218,25 @@ class PerAtomMAELoss(nn.Module):
         # check per_atom shape
         assert (target / _natoms).shape == target.shape
         return self.loss(pred / _natoms, target / _natoms)
+    
+
+@registry.register_loss("sym_exp_loss")
+class SymExpLoss(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mse_loss = nn.MSELoss(reduction="none")
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None) -> torch.Tensor:
+        _natoms = torch.reshape(natoms, target.shape)
+        symlog = lambda x: torch.sign(x) * torch.log(1 + torch.abs(x))
+        
+        # Force float32
+        pred = pred.float()
+        target = target.float()
+        _natoms = _natoms.float()
+        
+        loss = self.mse_loss(symlog(pred / _natoms), symlog(target / _natoms))
+        return loss
 
 
 @registry.register_loss("l2norm")

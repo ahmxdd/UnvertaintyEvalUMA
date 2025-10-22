@@ -38,9 +38,9 @@ bf16: True
 cpu_graph: True
 otf_graph: False
 normalizer_rmsd: 1.423
-direct_forces_coef: 50
+direct_forces_coef: 0
 omc_energy_coef: 0
-omol_energy_coef: 50
+omol_energy_coef: 100
 odac_energy_coef: 0
 oc20_energy_coef: 0
 omat_energy_coef: 0
@@ -135,7 +135,7 @@ heads:
   omc_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   omol_energy:
-    module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
+    module: fairchem.core.models.uma.escn_md.Symp_MLP_Energy_Head
   odac_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   forces:
