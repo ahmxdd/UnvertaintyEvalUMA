@@ -285,7 +285,8 @@ def compute_loss(
                 target,
                 mult_mask=mult_mask,
                 natoms=batch.natoms,
-                step=step
+                step=step,
+                batch=batch
             )
         else:
             pred_for_task = predictions[task.name][task.property]
@@ -303,7 +304,8 @@ def compute_loss(
                 target,
                 mult_mask=mult_mask,
                 natoms=batch.natoms,
-                step=step
+                step=step,
+                batch=None
             )
 
     # Sanity check to make sure the compute graph is correct.
@@ -529,6 +531,7 @@ class MLIPTrainEvalUnit(
     ):
         super().__init__()
         self.job_config = job_config
+        self.energy_mask_token = torch.nn.Parameter(torch.randn(1))
         # throw out tasks that are inference_only (don't use them for training/eval)
         self.tasks = filter_inference_only_tasks(tasks)
         self.profile_flops = profile_flops
@@ -630,6 +633,7 @@ class MLIPTrainEvalUnit(
                 StateDictType.SHARDED_STATE_DICT,
                 state_dict_config=ShardedStateDictConfig(),
             )
+        
 
             logging.info(f"Create device mesh {mesh_2d} for FSDP")
         else:
@@ -717,6 +721,19 @@ class MLIPTrainEvalUnit(
                 enabled=self.autocast_enabled,
                 dtype=self.autocast_dtype,
             ):
+                if step < 50000:
+                    original_energies = batch_on_device['omol_energy'].clone()
+                    batch_size = original_energies.shape[0]
+                    mask_ratio = 0.15
+                    mask = torch.rand(batch_size, device=original_energies.device) < mask_ratio
+                    batch_on_device["omol_energy_unmasked"] = original_energies.clone()
+                    batch_on_device["omol_energy"][mask] = self.energy_mask_token
+
+                    batch_on_device["mask"] = mask
+                else: 
+                    batch_on_device["mask"] = None
+                    batch_on_device["original_energy"] = None
+
                 with record_function("forward"):
                     pred = self.model.forward(batch_on_device)
                 with record_function("compute_loss"):

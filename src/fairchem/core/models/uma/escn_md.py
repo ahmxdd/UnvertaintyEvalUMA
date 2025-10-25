@@ -725,6 +725,70 @@ class MLP_EFS_Head(nn.Module, HeadInterface):
             outputs[forces_key] = {"forces": forces} if self.wrap_property else forces
         return outputs
 
+class Masked_MLP_Energy_Head(nn.Module, HeadInterface):
+    def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+        super().__init__()
+        self.reduce = reduce
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            
+        )
+
+        self.energy_layer = nn.Linear(self.hidden_channels, 1, bias=True)
+        self.reconstruction_layer = None
+        self._initial_embedding_dim = None
+    
+    def forward(
+        self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        node_scalar_embedding = emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        shared_output = self.energy_block(node_scalar_embedding) # Shape: [num_atoms, hidden_channels]
+        original_features_sample = data_dict["omol_energy_unmasked"]
+        self._initial_embedding_dim = original_features_sample.shape[-1]
+        print(f"INFO: Dynamically creating reconstruction layer with output dim {self._initial_embedding_dim}")
+        self.reconstruction_layer = nn.Linear(self.hidden_channels, self._initial_embedding_dim, bias=True)
+        self.reconstruction_layer.to(shared_output.device)
+        predicted_features = self.reconstruction_layer(shared_output)
+        return {
+                "energy": {
+                    "energy": predicted_features,
+                    "logits": predicted_features # Keep format consistent
+                }
+            }
+
+
+        node_energy = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        ).view(-1, 1, 1)
+        
+        energy_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+        energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
+        
+        if gp_utils.initialized():
+            energy = gp_utils.reduce_from_model_parallel_region(energy_part)
+        else:
+            energy = energy_part
+        
+        if "mask" in data_dict and data_dict["mask"] is not None:
+            return {"energy" : {"energy": energy, "logits": energy}}
+        else:
+            if self.reduce == "sum":
+                return {"energy" : {"energy": energy, "logits": energy}}
+            elif self.reduce == "mean":
+                return {"energy" : {
+                    "energy": energy / data_dict["natoms"], 
+                    "logits": energy / data_dict["natoms"]
+            }}
 
 class MLP_Energy_Head(nn.Module, HeadInterface):
     def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:

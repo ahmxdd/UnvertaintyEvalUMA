@@ -141,7 +141,8 @@ class DDPMTLoss(nn.Module):
         target: torch.Tensor,
         mult_mask: torch.Tensor,
         natoms: torch.Tensor,
-        step
+        step,
+        batch
     ):
         # ensure torch doesn't do any unwanted broadcasting
         assert (
@@ -155,7 +156,7 @@ class DDPMTLoss(nn.Module):
                 mult_mask = mult_mask.view(input.shape)
             loss = (
                 self.loss_fn(
-                    input.squeeze(), torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step
+                    input.squeeze(), torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step, batch
                 )
                 * mult_mask
                 )
@@ -168,7 +169,7 @@ class DDPMTLoss(nn.Module):
 
             loss = (
                 self.loss_fn(
-                    input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms
+                    input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step, batch
                 )
                 * mult_mask
             )
@@ -225,7 +226,7 @@ class PerAtomMAELoss(nn.Module):
         self.loss.reduction = "none"
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None, batch=None
     ) -> torch.Tensor:
         _natoms = torch.reshape(natoms, target.shape)
         # check if target is a scalar
@@ -245,23 +246,77 @@ class TestPerAtomMAELoss(nn.Module):
         self.logger = (
            WandBSingletonLogger.get_instance()
            )
+        # Assuming this is inside your loss class (e.g., SwitchedMAELoss.forward)
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
+        self, pred: dict, target: torch.Tensor, natoms: torch.Tensor, step: int = None, batch: dict = None
     ) -> torch.Tensor:
-        _natoms = torch.reshape(natoms, target.shape)
-        # check if target is a scalar
-       # assert target.dim() == 1 or (target.dim() == 2 and target.shape[1] == 1)
-        # check per_atom shape
-        #assert (target / _natoms).shape == target.shape
-        log_dict = {
-                "l1_loss_terms/peratomMAE": self.loss(pred / _natoms, target / _natoms).mean().item(),
-                "l1_loss_terms/scalar_energymax": torch.max(pred).item(),
-                "l1_loss_terms/scalar_energymin": torch.min(pred).item(),
-            }
-        self.logger.log(log_dict, step=step, commit=False)  
 
-        return self.loss(pred / _natoms, target / _natoms)
+        if step is not None and step < self.mae_steps:
+            # --- MAE Phase ---
+            predicted_features = pred.get("predicted_features") # Output from the head
+            mask = batch.get("input_mask")                     # Which atoms were masked
+            original_masked_features = batch.get("original_masked_features") # Ground truth for masked
+
+            # Basic validation
+            if predicted_features is None or mask is None or original_masked_features is None:
+                raise ValueError("Missing required keys for MAE loss calculation.")
+            
+            mask = mask.to(predicted_features.device) # Ensure mask is on correct device
+
+            # Select the predictions for the masked atoms
+            predicted_masked_features = predicted_features[mask]
+
+            # Handle case where no atoms were masked in this batch
+            if predicted_masked_features.numel() == 0:
+                 loss = torch.tensor(0.0, device=predicted_features.device, requires_grad=True)
+            else:
+                 # Calculate loss (L1 or MSE) between predicted and original features
+                 # No per-atom division needed here, loss is directly on features
+                 loss = F.l1_loss(predicted_masked_features, original_masked_features.to(predicted_features.device))
+
+            # --- Logging ---
+            if self.logger.is_active:
+                 self.logger.log({"masked_feature_recon_MAE": loss.item() if loss.numel() > 0 else 0}, step=step, commit=False)
+
+            # Return the single scalar loss value (mean over masked features)
+            return loss
+
+        else:
+            # --- Standard L1 Energy Phase ---
+            predicted_energy = pred["energy"]["energy"].squeeze()
+            target_energy = target.to(predicted_energy.device).squeeze()
+            _natoms = natoms.view_as(predicted_energy).to(predicted_energy.device)
+
+            loss_elements = self.loss_fn(predicted_energy / _natoms, target_energy / _natoms)
+            final_loss = loss_elements.mean()
+
+            if self.logger.is_active:
+                self.logger.log({"standard_per_atom_MAE": final_loss.item()}, step=step, commit=False)
+
+            return final_loss
+
+    # def forward(
+    #     self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step: int = None, batch: dict = None
+    # ) -> torch.Tensor:
+    #     predicted_energy = pred.squeeze()
+    #     _natoms = torch.reshape(natoms, target.shape)
+
+    #     if step < 50000:
+    #         mask = batch["mask"].to(predicted_energy.device)
+    #         original_energy = batch["omol_energy_unmasked"].to(predicted_energy.device).squeeze()
+    #         if mask.sum() == 0:
+    #             loss = torch.tensor(0.0, device=predicted_energy.device, requires_grad=True)
+    #         else:
+    #             pred_masked = predicted_energy[mask]
+    #             orig_masked = original_energy[mask]
+    #             _natoms = _natoms.squeeze()
+    #             natoms_masked = _natoms[mask]
+    #             loss = self.loss(pred_masked / natoms_masked, orig_masked / natoms_masked)
+            
+    #         return loss.mean()
+    #     else:
+    #         return self.loss(pred / _natoms, target / _natoms)
 
 @registry.register_loss("hlgaussl1")
 class HLGaussLossL1(nn.Module):
@@ -587,7 +642,7 @@ class L2NormLoss(nn.Module):
         super().__init__()
 
     def forward(
-        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None
+        self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step=None, batch=None
     ) -> torch.Tensor:
         assert target.dim() == 2
         assert target.shape[1] != 1
