@@ -235,88 +235,90 @@ class PerAtomMAELoss(nn.Module):
         assert (target / _natoms).shape == target.shape
         return self.loss(pred / _natoms, target / _natoms)
 
+# Assuming correct imports: torch, nn, registry, WandBSingletonLogger
+
 @registry.register_loss("test_per_atom_mae")
 class TestPerAtomMAELoss(nn.Module):
-
     def __init__(self) -> None:
         super().__init__()
-        self.loss = nn.L1Loss()
-        # reduction should be none as it is handled in DDPLoss
-        self.loss.reduction = "none"
-        self.logger = (
-           WandBSingletonLogger.get_instance()
-           )
-        # Assuming this is inside your loss class (e.g., SwitchedMAELoss.forward)
+        # Use reduction='none' to get element-wise loss before manual averaging
+        self.loss_fn = nn.L1Loss(reduction="none")
+        self.logger = WandBSingletonLogger.get_instance()
+        self.mae_steps = 50000 # Define MAE steps threshold
 
+    # Corrected signature matching compute_loss call
     def forward(
-        self, pred: dict, target: torch.Tensor, natoms: torch.Tensor, step: int = None, batch: dict = None
+        self, pred_tensor: torch.Tensor, target_tensor: torch.Tensor, natoms: torch.Tensor, step: int = None, batch: dict = None
     ) -> torch.Tensor:
 
-        if step is not None and step < self.mae_steps:
+        # Ensure prediction and target are 1D and on same device
+        predicted_energy = pred_tensor.squeeze().to(target_tensor.device)
+        target_energy = target_tensor.squeeze() # Target comes from batch, should be correct device
+        _natoms = natoms.view_as(predicted_energy).to(predicted_energy.device)
+        # Avoid division by zero
+        _natoms = torch.clamp(_natoms, min=1)
+
+        is_mae_phase = batch.get("is_mae_phase", False) # Check flag from batch
+
+        if is_mae_phase and step is not None and step < self.mae_steps:
             # --- MAE Phase ---
-            predicted_features = pred.get("predicted_features") # Output from the head
-            mask = batch.get("input_mask")                     # Which atoms were masked
-            original_masked_features = batch.get("original_masked_features") # Ground truth for masked
+            mask = batch["mask"]
+            original_energy = batch["original_energy"]
 
-            # Basic validation
-            if predicted_features is None or mask is None or original_masked_features is None:
-                raise ValueError("Missing required keys for MAE loss calculation.")
-            
-            mask = mask.to(predicted_features.device) # Ensure mask is on correct device
-
-            # Select the predictions for the masked atoms
-            predicted_masked_features = predicted_features[mask]
-
-            # Handle case where no atoms were masked in this batch
-            if predicted_masked_features.numel() == 0:
-                 loss = torch.tensor(0.0, device=predicted_features.device, requires_grad=True)
+            # Validate MAE data is present
+            if mask is None or original_energy is None:
+                print(f"Warning: MAE phase (step {step}) but mask or original_energy missing. Calculating standard MAE.")
+                is_mae_phase = False # Fallback to standard MAE
             else:
-                 # Calculate loss (L1 or MSE) between predicted and original features
-                 # No per-atom division needed here, loss is directly on features
-                 loss = F.l1_loss(predicted_masked_features, original_masked_features.to(predicted_features.device))
+                 mask = mask.to(predicted_energy.device).squeeze()
+                 original_energy = original_energy.to(predicted_energy.device).squeeze()
 
-            # --- Logging ---
-            if self.logger.is_active:
-                 self.logger.log({"masked_feature_recon_MAE": loss.item() if loss.numel() > 0 else 0}, step=step, commit=False)
+            # Proceed only if still in MAE phase after validation
+            if is_mae_phase:
+                # Handle empty mask case
+                if mask.sum() == 0:
+                    # Return zero loss tensor if nothing is masked
+                    # Return shape expected by DDPLoss (scalar if it averages means, or element-wise zeros)
+                    # Assuming scalar return:
+                     return torch.tensor(0.0, device=predicted_energy.device, requires_grad=True)
 
-            # Return the single scalar loss value (mean over masked features)
-            return loss
+                # Select masked elements
+                pred_masked = predicted_energy[mask]
+                orig_masked = original_energy[mask]
+                natoms_masked = _natoms[mask]
 
-        else:
-            # --- Standard L1 Energy Phase ---
-            predicted_energy = pred["energy"]["energy"].squeeze()
-            target_energy = target.to(predicted_energy.device).squeeze()
-            _natoms = natoms.view_as(predicted_energy).to(predicted_energy.device)
+                # Calculate element-wise loss ONLY on masked items
+                loss_elements = self.loss_fn(pred_masked / natoms_masked, orig_masked / natoms_masked)
 
-            loss_elements = self.loss_fn(predicted_energy / _natoms, target_energy / _natoms)
-            final_loss = loss_elements.mean()
+                # Calculate mean loss over masked items for logging and return
+                final_loss = loss_elements.mean()
 
-            if self.logger.is_active:
-                self.logger.log({"standard_per_atom_MAE": final_loss.item()}, step=step, commit=False)
 
-            return final_loss
+                log_dict = {
+                        "l1_loss_terms/masked_per_atom_MAE": final_loss.item(),
+                        "l1_loss_terms/mask_ratio_in_batch": mask.float().mean().item(),
+                    }
+                self.logger.log(log_dict, step=step, commit=False)
 
-    # def forward(
-    #     self, pred: torch.Tensor, target: torch.Tensor, natoms: torch.Tensor, step: int = None, batch: dict = None
-    # ) -> torch.Tensor:
-    #     predicted_energy = pred.squeeze()
-    #     _natoms = torch.reshape(natoms, target.shape)
+                # Return the scalar mean loss (assuming DDPLoss averages this)
+                return final_loss
 
-    #     if step < 50000:
-    #         mask = batch["mask"].to(predicted_energy.device)
-    #         original_energy = batch["omol_energy_unmasked"].to(predicted_energy.device).squeeze()
-    #         if mask.sum() == 0:
-    #             loss = torch.tensor(0.0, device=predicted_energy.device, requires_grad=True)
-    #         else:
-    #             pred_masked = predicted_energy[mask]
-    #             orig_masked = original_energy[mask]
-    #             _natoms = _natoms.squeeze()
-    #             natoms_masked = _natoms[mask]
-    #             loss = self.loss(pred_masked / natoms_masked, orig_masked / natoms_masked)
-            
-    #         return loss.mean()
-    #     else:
-    #         return self.loss(pred / _natoms, target / _natoms)
+        # --- Standard L1 Phase (or fallback from MAE) ---
+        # Calculate element-wise loss on ALL items
+        loss_elements = self.loss_fn(predicted_energy / _natoms, target_energy / _natoms)
+
+        # Calculate mean loss over all items
+        final_loss = loss_elements.mean()
+
+        # --- Logging for Standard MAE ---
+        if self.logger.is_active:
+             log_dict = {
+                 "l1_loss_terms/standard_per_atom_MAE": final_loss.item(),
+             }
+             self.logger.log(log_dict, step=step, commit=False)
+
+        # Return the scalar mean loss
+        return final_loss
 
 @registry.register_loss("hlgaussl1")
 class HLGaussLossL1(nn.Module):

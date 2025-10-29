@@ -726,11 +726,12 @@ class MLIPTrainEvalUnit(
                     batch_size = original_energies.shape[0]
                     mask_ratio = 0.15
                     mask = torch.rand(batch_size, device=original_energies.device) < mask_ratio
-                    batch_on_device["omol_energy_unmasked"] = original_energies.clone()
-                    batch_on_device["omol_energy"][mask] = self.energy_mask_token
+                    batch_on_device["original_energy"] = original_energies.clone()
+                    batch_on_device["is_mae_phase"] = True
 
                     batch_on_device["mask"] = mask
                 else: 
+                    batch_on_device["is_mae_phase"] = False
                     batch_on_device["mask"] = None
                     batch_on_device["original_energy"] = None
 
