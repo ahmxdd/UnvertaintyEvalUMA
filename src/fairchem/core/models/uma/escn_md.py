@@ -977,8 +977,10 @@ class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
        # softmax temp test: torch.nn.functional.softmax(node_logits / 2.0, dim=-1)
        # softplus test: probs = torch.nn.functional.softplus(node_logits)
        # probs = probs / probs.sum(dim=-1, keepdim=True)
+       probs = torch.nn.functional.softplus(node_logits)
+       probs = probs / probs.sum(dim=-1, keepdim=True)
 
-       system_logits_part.index_add_(0, data_dict["batch"], torch.nn.functional.softmax(node_logits, dim=-1))
+       system_logits_part.index_add_(0, data_dict["batch"], probs)
        energy_molecule.index_add_(0, data_dict["batch"], energy_per_atom)
       
        if gp_utils.initialized():
