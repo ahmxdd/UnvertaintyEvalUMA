@@ -145,23 +145,20 @@ class DDPMTLoss(nn.Module):
         batch
     ):
         # ensure torch doesn't do any unwanted broadcasting
-        assert (
-            input.shape[0] == target.shape[0] == mult_mask.shape[0]
-        ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
+        
         if hasattr(self.loss_fn, 'ignore_shape_check'):
-            assert (
-                input.shape[0] == target.shape[0] == mult_mask.shape[0]
-            ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
-            if input.numel() == mult_mask.numel():
-                mult_mask = mult_mask.view(input.shape)
+            
             loss = (
                 self.loss_fn(
-                    input.squeeze(), torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step, batch
+                    input, torch.nan_to_num(target, posinf=0.0, neginf=0.0), natoms, step, batch
                 )
                 * mult_mask
                 )
             loss = self._reduction(input, mult_mask, loss, natoms)
         else:
+            assert (
+            input.shape[0] == target.shape[0] == mult_mask.shape[0]
+        ), f"Mismatched shapes: {input.shape} and {target.shape} and {mult_mask.shape}"
         # Ensure torch doesn't do any unwanted broadcasting
             target = target.view(input.shape)
             if input.numel() == mult_mask.numel():
@@ -318,6 +315,119 @@ class TestPerAtomMAELoss(nn.Module):
              self.logger.log(log_dict, step=step, commit=False)
 
         # Return the scalar mean loss
+        return final_loss
+    
+
+@registry.register_loss("combined_masked_loss")
+class CombinedMaskedLoss(nn.Module):
+
+    def __init__(self, atom_loss_weight: float = 1.0):
+        super().__init__()
+        self.atom_loss_weight = atom_loss_weight
+        
+        self.energy_loss = nn.L1Loss(reduction="none")
+        self.atom_pred_loss = nn.CrossEntropyLoss(reduction="none")
+        self.ignore_shape_check = True
+
+    def forward(
+        self, 
+        pred: tuple, 
+        target: torch.Tensor, 
+        natoms: torch.Tensor, 
+        step=None, 
+        batch=None
+    ) -> torch.Tensor:
+        
+        try:
+            (
+                energy_pred,     # Shape: [batch_size]
+                atom_logits,     # Shape: [num_atoms_in_batch, num_tokens]
+                atom_mask,       # Shape: [num_atoms_in_batch] (boolean)
+                atom_labels,     # Shape: [num_atoms_in_batch] (long)
+            ) = pred
+        except (ValueError, TypeError) as e:
+            raise TypeError(
+                "CombinedMaskedLoss expects 'pred' to be a tuple. "
+                "Check your output head. "
+                f"Error: {e}"
+            )
+
+        _natoms = torch.reshape(natoms, target.shape)
+        
+        _natoms = _natoms.to(energy_pred.dtype)
+        target = target.to(energy_pred.dtype)
+
+        energy_loss = self.energy_loss(energy_pred / _natoms, target / _natoms)
+
+        masked_logits = atom_logits[atom_mask]    # Shape: [num_masked, num_tokens]
+        masked_labels = atom_labels[atom_mask]    # Shape: [num_masked]
+
+        num_masked = masked_labels.shape[0]
+        atom_loss_scalar = torch.tensor(0.0, device=energy_pred.device, dtype=energy_pred.dtype)
+
+        if num_masked > 0:
+            atom_loss_per_atom = self.atom_pred_loss(masked_logits, masked_labels)
+            atom_loss_scalar = atom_loss_per_atom.mean()
+
+        total_loss = (0.01* energy_loss) + (atom_loss_scalar * self.atom_loss_weight)
+        
+        return total_loss
+
+@registry.register_loss("mae_reconstruction_loss")
+class MAEReconstructionLoss(nn.Module):
+    def __init__(self, loss_type: str = "l1") -> None:
+        super().__init__()
+        if loss_type == "l1":
+            self.loss_fn = nn.L1Loss(reduction="none")
+        elif loss_type == "mse":
+            self.loss_fn = nn.MSELoss(reduction="none")
+        else:
+            raise ValueError("loss_type must be 'l1' or 'mse'")
+        self.logger = WandBSingletonLogger.get_instance()
+
+    def forward(
+        self, pred: dict, target: torch.Tensor, natoms: torch.Tensor = None, step: int = None, batch: dict = None
+    ) -> torch.Tensor:
+
+        predicted_features = pred.get("predicted_features") # Output from ReconstructionHead
+        mask = batch.get("input_mask")                     # Which atoms were masked
+        original_masked_features = batch.get("original_masked_features") # Ground truth for masked
+
+        # Check if we are actually in the MAE phase (via presence of necessary keys)
+        is_mae_phase = (predicted_features is not None and mask is not None and original_masked_features is not None)
+
+        if not is_mae_phase:
+             # Should not happen if routing in compute_loss is correct, but good safety check
+            print(f"Warning: MAEReconstructionLoss called at step {step} but MAE keys are missing.")
+            return torch.tensor(0.0, device=target.device) # Return zero loss if called incorrectly
+
+        mask = mask.to(predicted_features.device)
+
+        # Select the predictions for the masked atoms
+        predicted_masked_features = predicted_features[mask]
+
+        # Handle case where no atoms were masked
+        if predicted_masked_features.numel() == 0:
+             return torch.tensor(0.0, device=predicted_features.device, requires_grad=True)
+
+        # Ensure target features are on the correct device
+        original_masked_features = original_masked_features.to(predicted_features.device)
+
+        # Calculate element-wise loss between predicted and original features
+        loss_elements = self.loss_fn(predicted_masked_features, original_masked_features)
+
+        # Compute mean loss over the masked elements
+        final_loss = loss_elements.mean()
+
+        # Logging
+        if self.logger.is_active:
+             log_dict = {
+                 "mae_loss_terms/masked_feature_recon_loss": final_loss.item(),
+                 "mae_loss_terms/num_masked_atoms": mask.sum().item(),
+             }
+             self.logger.log(log_dict, step=step, commit=False)
+
+        # Return the scalar mean loss (assuming DDPLoss averages this)
         return final_loss
 
 @registry.register_loss("hlgaussl1")

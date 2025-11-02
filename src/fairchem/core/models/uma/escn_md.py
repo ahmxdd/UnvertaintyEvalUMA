@@ -147,11 +147,13 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
         self.SO3_grid["lmax_mmax"] = SO3_Grid(
             self.lmax, self.mmax, resolution=grid_resolution, rescale=True
         )
-
+        num_tokens = self.max_num_elements + 1
         # atom embedding
         self.sphere_embedding = nn.Embedding(
-            self.max_num_elements, self.sphere_channels
+            num_tokens, self.sphere_channels
         )
+        self.mask_token_index = 0
+        
 
         # charge / spin embedding
         self.charge_embedding = ChgSpinEmbedding(
@@ -423,9 +425,20 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
 
     @conditional_grad(torch.enable_grad())
     def forward(self, data_dict: AtomicData) -> dict[str, torch.Tensor]:
-        data_dict["atomic_numbers"] = data_dict["atomic_numbers"].long()
+        MASK_TOKEN_INDEX = 0
+        MASK_RATIO = 0.15
+        
+        original_atomic_numbers = data_dict["atomic_numbers"].clone()
+        num_atoms = original_atomic_numbers.shape[0]
+
+        input_mask = (torch.rand(num_atoms, device=original_atomic_numbers.device) < MASK_RATIO)
+       
+        masked_atomic_numbers = original_atomic_numbers.clone()
+        masked_atomic_numbers[input_mask] = MASK_TOKEN_INDEX
+        data_dict["atomic_numbers"] = masked_atomic_numbers.long()
         data_dict["atomic_numbers_full"] = data_dict["atomic_numbers"]
         data_dict["batch_full"] = data_dict["batch"]
+        
 
         csd_mixed_emb = self.csd_embedding(
             charge=data_dict["charge"],
@@ -539,11 +552,14 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
 
         # Final layer norm
         x_message = self.norm(x_message)
+
         out = {
             "node_embedding": x_message,
             "displacement": displacement,
             "orig_cell": orig_cell,
             "batch": data_dict["batch"],
+            "atom_mask": input_mask,
+            "original_atomic_numbers": original_atomic_numbers,
         }
         return out
 
@@ -731,53 +747,57 @@ class Masked_MLP_Energy_Head(nn.Module, HeadInterface):
         self.reduce = reduce
         self.sphere_channels = backbone.sphere_channels
         self.hidden_channels = backbone.hidden_channels
+        self.num_tokens = backbone.sphere_embedding.num_embeddings
+        self.atom_prediction_head = nn.Linear(
+            self.sphere_channels, 
+            self.num_tokens
+        )
 
         self.energy_block = nn.Sequential(
             nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
             nn.SiLU(),
             nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
             nn.SiLU(),
-            nn.Linear(self.hidden_channels, 1, bias=True), # Apply final layer here
+            nn.Linear(self.hidden_channels, 1, bias=True),
         )
     def forward(
         self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
     ) -> dict[str, torch.Tensor]:
-        node_energy = self.energy_block(
-            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
-        ) # Shape: [num_atoms, 1]
+        node_scalar_emb = emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
 
-        # 2. Aggregate per-atom contributions to get per-molecule energy
+        node_energy = self.energy_block(node_scalar_emb)
         energy_part = torch.zeros(
             len(data_dict["natoms"]),
             device=node_energy.device,
             dtype=node_energy.dtype,
         )
-        energy_part.index_add_(0, data_dict["batch"], node_energy.squeeze(-1)) # Squeeze before adding
-
-        # 3. Handle distributed reduction
+        energy_part.index_add_(0, data_dict["batch"], node_energy.squeeze(-1))
         if gp_utils.initialized():
             energy_molecule = gp_utils.reduce_from_model_parallel_region(energy_part)
         else:
             energy_molecule = energy_part
-
-        # 4. Apply reduction (sum or mean) - Always do this, head doesn't need to know phase
         if self.reduce == "mean":
-            # Ensure natoms is correct shape and device
             natoms_tensor = data_dict["natoms"].to(energy_molecule.device).view(-1)
-            # Avoid division by zero for molecules with zero atoms (should not happen in practice)
             natoms_tensor = torch.clamp(natoms_tensor, min=1)
             final_energy = energy_molecule / natoms_tensor
         elif self.reduce == "sum":
             final_energy = energy_molecule
         else:
              raise ValueError("reduce must be 'sum' or 'mean'")
+        atom_pred_logits = self.atom_prediction_head(node_scalar_emb)
+        all_outputs = (
+            final_energy,                   # [0] Original energy 
+            atom_pred_logits,               # [1] Atom prediction logits
+            emb["atom_mask"],               # [2] Atom prediction mask
+            emb["original_atomic_numbers"]  # [3] Atom prediction labels
+        )
 
-        # 5. Return predictions consistently
-        # Loss function uses the "logits" key if needed by wrapper, otherwise "energy" key.
+
+    
         return {
             "energy": {
                 "energy": final_energy,
-                "logits": final_energy # Keep format consistent
+                "logits": all_outputs # Keep format consistent
             }
         }
 
@@ -824,12 +844,20 @@ class MLP_Energy_Head(nn.Module, HeadInterface):
                 f"reduce can only be sum or mean, user provided: {self.reduce}"
             )
 
-
-class Linear_Energy_Head(nn.Module, HeadInterface):
+class MLP_Energy_Head(nn.Module, HeadInterface):
     def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
         super().__init__()
         self.reduce = reduce
-        self.energy_block = nn.Linear(backbone.sphere_channels, 1, bias=True)
+
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
 
     def forward(
         self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
@@ -845,7 +873,6 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
         )
 
         energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
-
         if gp_utils.initialized():
             energy = gp_utils.reduce_from_model_parallel_region(energy_part)
         else:
@@ -859,6 +886,58 @@ class Linear_Energy_Head(nn.Module, HeadInterface):
             raise ValueError(
                 f"reduce can only be sum or mean, user provided: {self.reduce}"
             )
+class OMOL_MLP_Energy_Head(nn.Module, HeadInterface):
+    def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+        super().__init__()
+        self.reduce = reduce
+
+        self.sphere_channels = backbone.sphere_channels
+        self.hidden_channels = backbone.hidden_channels
+        self.energy_block = nn.Sequential(
+            nn.Linear(self.sphere_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, self.hidden_channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(self.hidden_channels, 1, bias=True),
+        )
+
+    def forward(
+        self, data_dict: AtomicData, emb: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        node_energy = self.energy_block(
+            emb["node_embedding"].narrow(1, 0, 1).squeeze(1)
+        ).view(-1, 1, 1)
+
+        energy_part = torch.zeros(
+            len(data_dict["natoms"]),
+            device=node_energy.device,
+            dtype=node_energy.dtype,
+        )
+
+        energy_part.index_add_(0, data_dict["batch"], node_energy.view(-1))
+        if gp_utils.initialized():
+            energy = gp_utils.reduce_from_model_parallel_region(energy_part)
+        else:
+            energy = energy_part
+
+        if self.reduce == "sum":
+           return {
+            "energy": {
+                "logits": energy,
+                "energy": energy
+            }
+        }
+        elif self.reduce == "mean":
+            return { 
+            "energy": { 
+                "logits": energy / data_dict["natoms"],
+                "energy": energy / data_dict["natoms"]
+            }
+        }
+        else:
+           raise ValueError(
+               f"reduce can only be sum or mean, user provided: {self.reduce}"
+           )
         
 
 class HL_Gauss_Energy_Head_Hierarchal(nn.Module, HeadInterface):

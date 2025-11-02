@@ -271,10 +271,10 @@ def compute_loss(
 
             if task.level == "atom":
                 energy_pred = energy_pred.view(num_atoms_in_batch, -1)
-                energy_logits = energy_logits.view(num_atoms_in_batch, -1)
+                #energy_logits = energy_logits.view(num_atoms_in_batch, -1)
             else:
                 energy_pred = energy_pred.view(batch_size, -1)
-                energy_logits = energy_logits.view(batch_size, -1)
+                #energy_logits = energy_logits.view(batch_size, -1)
 
             if task.level == "atom" and task.train_on_free_atoms:
                 mult_mask = free_mask & output_mask
@@ -721,19 +721,38 @@ class MLIPTrainEvalUnit(
                 enabled=self.autocast_enabled,
                 dtype=self.autocast_dtype,
             ):
-                if step < 50000:
-                    original_energies = batch_on_device['omol_energy'].clone()
-                    batch_size = original_energies.shape[0]
-                    mask_ratio = 0.15
-                    mask = torch.rand(batch_size, device=original_energies.device) < mask_ratio
-                    batch_on_device["original_energy"] = original_energies.clone()
-                    batch_on_device["is_mae_phase"] = True
+                # # --- MAE Pre-training Stage ---
+                # if step < 50000:
+                #     # --- Mask INPUT ATOMIC NUMBERS ---
+                #     original_atomic_numbers = batch_on_device['atomic_numbers'].clone()
+                #     num_atoms = batch_on_device['natoms']
+                #     mask_ratio = 0.15
+                #     input_mask = torch.rand(num_atoms, device=original_atomic_numbers.device) < mask_ratio
 
-                    batch_on_device["mask"] = mask
-                else: 
-                    batch_on_device["is_mae_phase"] = False
-                    batch_on_device["mask"] = None
-                    batch_on_device["original_energy"] = None
+                #     with torch.no_grad():
+                #         all_original_features = self.model.module.backbone.dataset_embedding.dataset_emb_dict["omol"](original_atomic_numbers)
+                #         # --- *** ---
+                #         # Select ONLY the features corresponding to the masked atoms
+                #         original_masked_features = all_original_features[input_mask]
+
+                #     # 2. Create masked atomic numbers (replace with mask token, e.g., 0)
+                #     masked_atomic_numbers = original_atomic_numbers.clone()
+                #     mask_token_value = 0 # Define your mask token value
+                #     masked_atomic_numbers[input_mask] = mask_token_value
+
+                #     # 3. Store necessary info in the batch dictionary
+                #     #    'masked_atomic_numbers' will be used by the model's forward pass
+                #     #    to generate potentially different (masked) initial embeddings internally.
+                #     batch_on_device["masked_atomic_numbers"] = masked_atomic_numbers
+                #     batch_on_device["input_mask"] = input_mask
+                #     batch_on_device["original_masked_features"] = original_masked_features # Target for the loss
+                #     batch_on_device["is_mae_phase"] = True
+
+                # else: # Standard energy prediction stage
+                #     batch_on_device["masked_atomic_numbers"] = None
+                #     batch_on_device["input_mask"] = None
+                #     batch_on_device["original_masked_features"] = None
+                #     batch_on_device["is_mae_phase"] = False
 
                 with record_function("forward"):
                     pred = self.model.forward(batch_on_device)
