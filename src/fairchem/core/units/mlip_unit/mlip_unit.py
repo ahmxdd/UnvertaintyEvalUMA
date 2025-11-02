@@ -926,7 +926,10 @@ class MLIPTrainEvalUnit(
 
     def _execute_load_state(self, checkpoint_location: str | None) -> None:
         state = {"unit_state": self.state_dict()}
-        dcp.load(state_dict=state, checkpoint_id=checkpoint_location)
+        #dcp.load(state_dict=state, checkpoint_id=checkpoint_location)
+        state["unit_state"] = torch.load(
+            f=os.path.join(checkpoint_location, "inference_ckpt.pt"), 
+            map_location=torch.device('cpu')).model_state_dict
         self.load_state_dict(state["unit_state"])
         logging.info(f"Done loading checkpoint from {checkpoint_location}")
 

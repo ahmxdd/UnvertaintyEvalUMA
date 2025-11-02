@@ -135,7 +135,7 @@ heads:
   omc_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   omol_energy:
-    module: fairchem.core.models.uma.escn_md.HL_Gauss_Energy_Head_Linear
+    module: fairchem.core.models.uma.escn_md.OMOL_MLP_Energy_Head
   odac_energy:
     module: fairchem.core.models.uma.escn_md.MLP_Energy_Head
   forces:
