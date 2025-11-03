@@ -1014,6 +1014,7 @@ class MLIPEvalUnit(EvalUnit[AtomicData]):
         data = data.to(device)
         self.total_atoms += data.natoms.sum().item()
         # debug asap please please pretty please. step must be defined
+        # THE STEP BELOW IS ALWAYS 0
         step = self.eval_progress.num_steps_completed
 
 
