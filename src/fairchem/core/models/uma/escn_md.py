@@ -149,8 +149,9 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
         )
 
         # atom embedding
+        # added 1 to sphere_embedding
         self.sphere_embedding = nn.Embedding(
-            self.max_num_elements, self.sphere_channels
+            self.max_num_elements + 1, self.sphere_channels
         )
 
         # charge / spin embedding
