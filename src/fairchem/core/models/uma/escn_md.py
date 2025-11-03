@@ -426,7 +426,7 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
     @conditional_grad(torch.enable_grad())
     def forward(self, data_dict: AtomicData) -> dict[str, torch.Tensor]:
         MASK_TOKEN_INDEX = 0
-        MASK_RATIO = 0.15
+        MASK_RATIO = 0.70
         
         original_atomic_numbers = data_dict["atomic_numbers"].clone()
         num_atoms = original_atomic_numbers.shape[0]
