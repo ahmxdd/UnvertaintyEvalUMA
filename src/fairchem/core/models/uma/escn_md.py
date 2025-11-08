@@ -1004,7 +1004,9 @@ class HL_Gauss_Energy_Head_Log(nn.Module, HeadInterface): # Renamed for clarity
         end = 20
         num_points_per_side = 16
         
-        positive_part = torch.logspace(start_exp, torch.log10(torch.tensor(end)), num_points_per_side, base=2)
+        # Convert the end *value* (20) into a base-2 *exponent*
+        end_exp = torch.log2(torch.tensor(end)) 
+        positive_part = torch.logspace(start_exp, end_exp, num_points_per_side, base=2)
         negative_part = -torch.flip(positive_part, dims=[0])
         self.support = torch.cat((negative_part[:-1], torch.tensor([0.0]), positive_part))
         

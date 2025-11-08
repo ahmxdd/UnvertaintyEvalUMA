@@ -598,7 +598,9 @@ class HLGaussLossCE_Log(nn.Module): # Renamed for clarity
         self.ignore_shape_check = True
         
         # --- Create the symmetric log-spaced support tensor ---
-        positive_part = torch.logspace(start_exp, torch.log10(torch.tensor(end)), num_points_per_side, base=2)
+        # Convert the end *value* (20) into a base-2 *exponent*
+        end_exp = torch.log2(torch.tensor(end)) 
+        positive_part = torch.logspace(start_exp, end_exp, num_points_per_side, base=2)
         negative_part = -torch.flip(positive_part, dims=[0])
         self.support = torch.cat((negative_part[:-1], torch.tensor([0.0]), positive_part))
         self.num_bins = len(self.support) - 1
@@ -634,14 +636,18 @@ class HLGaussLossCE_Log(nn.Module): # Renamed for clarity
         self.support = self.support.to(target.device)
         min_val, max_val = self.support.min(), self.support.max()
         clamped_target = torch.clamp(target_per_atom, min_val, max_val)
-        target_probs = self.transform_to_probs(clamped_target)
         
-        log_pred_probs = torch.log(pred / natoms.unsqueeze(1))
+        target_probs = self.transform_to_probs(clamped_target)
+        pred_probs_normalized = pred / natoms.unsqueeze(1)
+        
+        target_probs_stable = target_probs + 1e-12
+        pred_probs_stable = pred_probs_normalized + 1e-12
+        log_pred_probs = torch.log(pred_probs_stable)
         loss_per_sample = torch.nn.functional.kl_div(
-            log_pred_probs, target_probs, reduction="none"
+            log_pred_probs, target_probs_stable, reduction="none"
         ).sum(dim=1)
         # Return the average loss for the batch
-        mae = torch.abs((self.transform_from_probs(pred / natoms.unsqueeze(1)) - target_per_atom)).mean()
+        mae = torch.abs((self.transform_from_probs(pred_probs_normalized) - target_per_atom)).mean()
 
         log_dict = {
                 "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(),
