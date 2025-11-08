@@ -485,34 +485,111 @@ class HLGaussLossLinear(nn.Module):
             log_pred_probs, target_probs_stable, reduction="none"
             ).sum(dim=1)
         
-        pred_scalar = self.transform_from_probs(pred_probs_normalized, support)
-        prediction_error = pred_scalar - target_per_atom
-        mae = torch.abs(prediction_error).mean()
-        mean_error_bias = prediction_error.mean() # New: Logs prediction bias
-        pred_scalar_std = pred_scalar.std()        # New: Logs variance of predictions
-        target_scalar_std = target_per_atom.std()  # New: Logs variance of targets
-        target_entropy = torch.distributions.Categorical(probs=target_probs_stable).entropy().mean() # Requested
-        pred_entropy = torch.distributions.Categorical(probs=pred_probs_stable).entropy().mean()   # New: Tracks model confidence
+        # pred_scalar = self.transform_from_probs(pred_probs_normalized, support)
+        # prediction_error = pred_scalar - target_per_atom
+        # mae = torch.abs(prediction_error).mean()
+        # mean_error_bias = prediction_error.mean() # New: Logs prediction bias
+        # pred_scalar_std = pred_scalar.std()        # New: Logs variance of predictions
+        # target_scalar_std = target_per_atom.std()  # New: Logs variance of targets
+        # target_entropy = torch.distributions.Categorical(probs=target_probs_stable).entropy().mean() # Requested
+        # pred_entropy = torch.distributions.Categorical(probs=pred_probs_stable).entropy().mean()   # New: Tracks model confidence
 
         #mae = torch.abs((self.transform_from_probs(pred / natoms.unsqueeze(1), support) - target_per_atom)).mean()
 
+        bin_centers = (support[:-1] + support[1:]) / 2  # Shape: (num_bins,)
+        
+        # Predicted mean (scalar output from distribution)
+        pred_mean = self.transform_from_probs(pred_probs_normalized, support)  # Shape: (batch_size,)
+        
+        # Calculate standard deviation
+        pred_variance = torch.sum(
+            pred_probs_normalized * (bin_centers.unsqueeze(0) - pred_mean.unsqueeze(1))**2, 
+            dim=1
+        )
+        pred_std = torch.sqrt(pred_variance + 1e-12)
+        
+        # Calculate skewness and kurtosis
+        # Normalized deviations: z = (x - μ) / σ
+        z = (bin_centers.unsqueeze(0) - pred_mean.unsqueeze(1)) / (pred_std.unsqueeze(1) + 1e-12)
+        
+        pred_skewness = torch.sum(pred_probs_normalized * z**3, dim=1)
+        pred_kurtosis = torch.sum(pred_probs_normalized * z**4, dim=1) - 3  # Excess kurtosis
+
+        # Add this after calculating kurtosis and before creating reference_probs
+        pred_entropy = -torch.sum(pred_probs_normalized * torch.log(pred_probs_stable), dim=1)
+
+        
+        # Create reference Gaussian distribution with pred_mean and self.sigma variance
+        reference_probs = self.transform_to_probs(pred_mean, support)  # Shape: (batch_size, num_bins)
+        reference_probs_stable = reference_probs + 1e-12
+        
+        # KL divergence: KL(pred || reference)
+        log_pred_probs_for_kl = torch.log(pred_probs_stable)
+        kl_divergence = torch.nn.functional.kl_div(
+            log_pred_probs_for_kl, reference_probs_stable, reduction="none"
+        ).sum(dim=1)
+
+        # JS divergence: JS(pred || reference) = 0.5 * KL(pred || M) + 0.5 * KL(reference || M)
+        # where M = 0.5 * (pred + reference)
+        m_probs = 0.5 * (pred_probs_stable + reference_probs_stable)
+        
+        js_divergence = 0.5 * torch.nn.functional.kl_div(
+            log_pred_probs_for_kl, m_probs, reduction="none"
+        ).sum(dim=1) + 0.5 * torch.nn.functional.kl_div(
+            torch.log(reference_probs_stable), m_probs, reduction="none"
+        ).sum(dim=1)
+        
+        # Calculate absolute error for correlation analysis
+        abs_error = torch.abs(pred_mean - target_per_atom)
+        
         log_dict = {
-            "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(),
-            "hlgauss_loss_terms/exact_mae": mae.item(),
-            "hlgauss_loss_terms/target_max": torch.max(target_per_atom).item(),
-            "hlgauss_loss_terms/target_min": torch.min(target_per_atom).item(),
-            
-            "hlgauss_diagnostics/target_entropy": target_entropy.item(),
-            "hlgauss_diagnostics/pred_entropy": pred_entropy.item(),
-            "hlgauss_diagnostics/mean_error_bias": mean_error_bias.item(),
-            "hlgauss_diagnostics/target_scalar_std": target_scalar_std.item(),
-            "hlgauss_diagnostics/pred_scalar_std": pred_scalar_std.item()
-            }
+            "uncertainty/pred_std_mean": pred_std.mean().item(),
+            "uncertainty/pred_skewness_mean": pred_skewness.mean().item(),
+            "uncertainty/pred_kurtosis_mean": pred_kurtosis.mean().item(),
+            "uncertainty/kl_divergence_mean": kl_divergence.mean().item(),
+            "uncertainty/js_divergence_mean": js_divergence.mean().item(),
+            "uncertainty/abs_error_mean": abs_error.mean().item(),
+            "uncertainty/pred_entropy_mean": pred_entropy.mean().item(),
+        }
+
+        def pearson_corr(x, y):
+            vx = x - x.mean()
+            vy = y - y.mean()
+            corr = (vx * vy).sum() / (torch.sqrt((vx**2).sum()) * torch.sqrt((vy**2).sum()) + 1e-12)
+            return corr.item()
+        
+        log_dict["correlation/std_vs_abs_error"] = pearson_corr(pred_std, abs_error)
+        log_dict["correlation/skewness_vs_abs_error"] = pearson_corr(pred_skewness, abs_error)
+        log_dict["correlation/kurtosis_vs_abs_error"] = pearson_corr(pred_kurtosis, abs_error)
+        log_dict["correlation/kl_div_vs_abs_error"] = pearson_corr(kl_divergence, abs_error)
+        log_dict["correlation/js_div_vs_abs_error"] = pearson_corr(js_divergence, abs_error)
+        log_dict["correlation/entropy_vs_abs_error"] = pearson_corr(pred_entropy, abs_error)
+
         self.logger.log(log_dict, step=step, commit=False)
+
         if torch.isnan(loss_per_sample).any():
             print("NaN detected in loss_per_sample")
-
+        
         return loss_per_sample
+        
+
+        # log_dict = {
+        #     "hlgauss_loss_terms/total_loss": loss_per_sample.mean().item(),
+        #     "hlgauss_loss_terms/exact_mae": mae.item(),
+        #     "hlgauss_loss_terms/target_max": torch.max(target_per_atom).item(),
+        #     "hlgauss_loss_terms/target_min": torch.min(target_per_atom).item(),
+            
+        #     "hlgauss_diagnostics/target_entropy": target_entropy.item(),
+        #     "hlgauss_diagnostics/pred_entropy": pred_entropy.item(),
+        #     "hlgauss_diagnostics/mean_error_bias": mean_error_bias.item(),
+        #     "hlgauss_diagnostics/target_scalar_std": target_scalar_std.item(),
+        #     "hlgauss_diagnostics/pred_scalar_std": pred_scalar_std.item()
+        #     }
+        # self.logger.log(log_dict, step=step, commit=False)
+        # if torch.isnan(loss_per_sample).any():
+        #     print("NaN detected in loss_per_sample")
+
+        # return loss_per_sample
 
 @registry.register_loss("HLGaussLossCE_Log")
 class HLGaussLossCE_Log(nn.Module): # Renamed for clarity
