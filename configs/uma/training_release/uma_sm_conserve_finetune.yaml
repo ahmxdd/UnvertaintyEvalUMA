@@ -25,7 +25,7 @@ job:
     entity: fairchem
     project: uma
 
-starting_checkpoint: "/checkpoint/ocp/shared/uma/202505-0117-1812-5a58/checkpoints/final/inference_ckpt.pt"
+starting_checkpoint: "/pub0/qasim/biology/uma_runs/202511-0300-0607-a04b/checkpoints/step_500000/inference_ckpt.pt"
 max_neighbors: 300
 cutoff_radius: 6
 epochs: null
