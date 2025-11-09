@@ -5,7 +5,7 @@ omc_train:
   splits:
     train:
       sample_n: 10000
-      src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
+  #     src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
   format: ase_db
   a2g_args:
     r_energy: True
@@ -28,7 +28,7 @@ omc_val:
   splits:
     val:
       sample_n: 10
-      src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
+  #     src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
   format: ase_db
   a2g_args:
     r_energy: True
@@ -94,7 +94,7 @@ odac_train:
     train:
       sample_n: 10000
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
   format: ase_db
   a2g_args:
     r_energy: True
@@ -114,7 +114,7 @@ odac_val:
     val:
       sample_n: 10
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
   format: ase_db
   a2g_args:
     r_energy: True
@@ -134,7 +134,7 @@ omat_train:
     train:
       sample_n: 10000
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-npt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-npt
   format: ase_db
   a2g_args:
     r_energy: True
@@ -158,11 +158,11 @@ omat_val:
     val:
       sample_n: 10
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-npt
+    #     - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-npt
     test:
       sample_n: 10
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/test_protostructure/aimd-from-PBE-1000-npt
+    #     - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/test_protostructure/aimd-from-PBE-1000-npt
   format: ase_db
   a2g_args:
     r_energy: True
@@ -186,7 +186,7 @@ oc20_train:
     train:
       sample_n: 10000
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
   format: ase_db
   a2g_args:
     r_energy: True
@@ -206,7 +206,7 @@ oc20_val:
     val_id:
       sample_n: 10
       src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
   format: ase_db
   a2g_args:
     r_energy: True

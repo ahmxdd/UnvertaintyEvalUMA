@@ -919,7 +919,7 @@ class HL_Gauss_Energy_Head_Hierarchal(nn.Module, HeadInterface):
            )
 
 class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
-   def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum") -> None:
+   def __init__(self, backbone: eSCNMDBackbone, reduce: str = "sum", wrap_property: bool = True,) -> None:
        super().__init__()
        self.reduce = reduce
 

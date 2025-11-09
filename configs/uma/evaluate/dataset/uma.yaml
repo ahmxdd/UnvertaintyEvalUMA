@@ -296,13 +296,13 @@ omat:
       dataset_name: omat
 
 oc20:
-  splits:
-    val_id:
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
-    val_ood_both:
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
+  # splits:
+  #   val_id:
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
+  #   val_ood_both:
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
 # no energy labels in dataset
 #     test_id:
 #       src:

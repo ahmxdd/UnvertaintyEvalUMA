@@ -316,7 +316,7 @@ class DatasetSpecificSingleHeadWrapper(nn.Module, HeadInterface):
         full_output = {}
         for dataset_name in self.dataset_names:
             dataset_mask = np_dataset_names == dataset_name
-            for key, head_output_tensor in head_output.items():
+            for key, head_output_tensor in head_output['energy'].items():
                 # TODO cant we use torch.zeros here?
                 output_tensor = head_output_tensor.new_zeros(
                     head_output_tensor.shape

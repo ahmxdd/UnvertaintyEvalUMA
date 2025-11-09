@@ -2,9 +2,9 @@ snapshot_dir: dataset_sync_250225
 omol_final_snapshot_dir: omol/250430-release
 
 omc_train:
-  splits:
-    train:
-      src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/train/
+  # splits:
+  #   train:
+  #     src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/train/
   format: ase_db
   a2g_args:
     r_energy: True
@@ -22,10 +22,10 @@ omc_train:
       dataset_name: omc
 
 omc_val:
-  splits:
-    val:
-      sample_n: 25000
-      src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
+  # splits:
+  #   val:
+  #     sample_n: 25000
+  #     src: ${cluster.data_root_dir}/${dataset.snapshot_dir}/csp/250225/val/
   format: ase_db
   a2g_args:
     r_energy: True
@@ -63,9 +63,9 @@ omol_train:
 
 omol_val:
   splits:
-    metal_ligand_ood:
-      sample_n: 20000
-      src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/omol/250303/metal_ligand_ood
+    # metal_ligand_ood:
+    #   sample_n: 20000
+    #   src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/omol/250303/metal_ligand_ood
     val_mo:
       sample_n: 20000
       src: ${cluster.data_root_dir}/${dataset.omol_final_snapshot_dir}/omol/250303/val
@@ -127,10 +127,10 @@ omol_val:
       dataset_name: omol
 
 odac_train:
-  splits:
-    train:
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/train
+  # splits:
+  #   train:
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/train
   format: ase_db
   a2g_args:
     r_energy: True
@@ -147,11 +147,11 @@ odac_train:
       dataset_name: odac
 
 odac_val:
-  splits:
-    val:
-      sample_n: 20000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
+  # splits:
+  #   val:
+  #     sample_n: 20000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/odac/250225/val
   format: ase_db
   a2g_args:
     r_energy: True
@@ -168,20 +168,20 @@ odac_val:
       dataset_name: odac
 
 omat_train:
-  splits:
-    train:
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-npt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-nvt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-3000-npt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-3000-nvt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-300-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-500-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-1000-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-300
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-500
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-1000
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-relax
+  # splits:
+  #   train:
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-npt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-1000-nvt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-3000-npt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/aimd-from-PBE-3000-nvt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-300-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-500-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-1000-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-300
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-500
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-1000
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/train/rattled-relax
   format: ase_db
   a2g_args:
     r_energy: True
@@ -198,21 +198,21 @@ omat_train:
       dataset_name: omat
 
 omat_val:
-  splits:
-    val:
-      sample_n: 25000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-npt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-nvt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-3000-npt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-3000-nvt
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-300-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-500-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-1000-subsampled
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-300
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-500
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-1000
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-relax
+  # splits:
+  #   val:
+  #     sample_n: 25000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-npt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-1000-nvt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-3000-npt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/aimd-from-PBE-3000-nvt
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-300-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-500-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-1000-subsampled
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-300
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-500
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-1000
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/omat24/val/rattled-relax
   format: ase_db
   a2g_args:
     r_energy: True
@@ -229,16 +229,16 @@ omat_val:
       dataset_name: omat
 
 oc20_train:
-  splits:
-    train:
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/all
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/md38M
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/rattled17M
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/train
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/val_id
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/val_ood
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/multi_adsorbate/250214/train+val
+  # splits:
+  #   train:
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/all
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/md38M
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/train/rattled17M
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/train
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/val_id
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20_slabs/val_ood
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/multi_adsorbate/250214/train+val
   format: ase_db
   a2g_args:
     r_energy: True
@@ -253,15 +253,15 @@ oc20_train:
       dataset_name: oc20
 
 oc20_val:
-  splits:
-    val_id:
-      sample_n: 25000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
-    val_ood_both:
-      sample_n: 25000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
+  # splits:
+  #   val_id:
+  #     sample_n: 25000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
+  #   val_ood_both:
+  #     sample_n: 25000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
   format: ase_db
   a2g_args:
     r_energy: True

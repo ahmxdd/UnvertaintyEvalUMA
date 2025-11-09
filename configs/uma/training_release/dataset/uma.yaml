@@ -279,15 +279,15 @@ oc20_train:
       dataset_name: oc20
 
 oc20_val:
-  splits:
-    val_id:
-      sample_n: 25000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
-    val_ood_both:
-      sample_n: 25000
-      src:
-        - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
+  # splits:
+  #   val_id:
+  #     sample_n: 25000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/id
+  #   val_ood_both:
+  #     sample_n: 25000
+  #     src:
+  #       - ${cluster.data_root_dir}/${dataset.snapshot_dir}/oc20/val/ood_both
   format: ase_db
   a2g_args:
     r_energy: True

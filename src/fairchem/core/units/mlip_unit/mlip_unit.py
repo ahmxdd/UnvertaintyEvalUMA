@@ -266,8 +266,8 @@ def compute_loss(
         # this is related to how Hydra outputs stuff in nested dicts:
         # ie: oc20_energy.energy
         if task.name == 'omol_energy' and task.property == "energy":
-            energy_pred = predictions["omol_energy"]["energy"]["energy"]
-            energy_logits = predictions["omol_energy"]["energy"]["logits"]
+            energy_pred = predictions["omol_energy"]["energy"]
+            energy_logits = predictions["omol_logits"]["logits"]
 
             if task.level == "atom":
                 energy_pred = energy_pred.view(num_atoms_in_batch, -1)
