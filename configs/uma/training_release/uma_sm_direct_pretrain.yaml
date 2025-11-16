@@ -32,8 +32,8 @@ max_neighbors: 30
 cutoff_radius: 6
 epochs: null
 steps:  1000000 # 1680000 = 140B atoms, 128 ranks, max atoms 700 (mean atoms 650)
-max_atoms: 2000 # 700 , tests done on batch size 1050
-eval_max_atoms: 350 # 
+max_atoms: 1050 # 700 , tests done on batch size 1050
+eval_max_atoms: 350 
 bf16: True
 cpu_graph: True
 otf_graph: False
