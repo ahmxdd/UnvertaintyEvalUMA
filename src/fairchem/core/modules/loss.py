@@ -435,7 +435,7 @@ class HLGaussLossHierarchal(nn.Module):
 
 @registry.register_loss("HLGaussLossLinear")
 class HLGaussLossLinear(nn.Module):
-    def __init__(self, min_value: float = -10.0, max_value: float = 20.0, num_bins: int = 100) -> None:
+    def __init__(self, min_value: float = -10.0, max_value: float = 20.0, num_bins: int = 50) -> None:
         super().__init__()
         self.ignore_shape_check = True
         self.min_value = min_value

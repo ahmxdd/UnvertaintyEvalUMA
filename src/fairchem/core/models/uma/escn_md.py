@@ -925,7 +925,7 @@ class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
 
        self.min_value = -10.0
        self.max_value = 20.0
-       self.num_bins = 100
+       self.num_bins = 250
        bin_width = (self.max_value - self.min_value) / self.num_bins
        self.sigma = 0.75 * bin_width
 
@@ -978,7 +978,7 @@ class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
        #probs = torch.nn.functional.softplus(node_logits)
        #probs = probs / probs.sum(dim=-1, keepdim=True)
 
-       system_logits_part.index_add_(0, data_dict["batch"], torch.nn.functional.softmax(node_logits / 10.0, dim=-1))
+       system_logits_part.index_add_(0, data_dict["batch"], torch.nn.functional.softmax(node_logits, dim=-1))
        energy_molecule.index_add_(0, data_dict["batch"], energy_per_atom)
       
        if gp_utils.initialized():
