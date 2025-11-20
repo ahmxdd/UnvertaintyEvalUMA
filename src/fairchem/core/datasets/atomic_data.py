@@ -169,6 +169,8 @@ class AtomicData:
             self.dataset = dataset
 
         # tagets
+        # self.omol_energy = np.array(0.0)
+        # self.forces = np.array(0.0)
         if energy is not None:
             self.energy = energy
         if forces is not None:
@@ -296,7 +298,7 @@ class AtomicData:
     def from_ase(
         cls,
         input_atoms: ase.Atoms,
-        r_edges: bool = False,
+        r_edges: bool = True,
         radius: float = 6.0,
         max_neigh: int | None = None,
         sid: str | None = None,
@@ -499,6 +501,8 @@ class AtomicData:
             dictionary.keys()
         ), f"Missing required keys: {set(_REQUIRED_KEYS) - set(dictionary.keys())}"
 
+        if 'omol_energy' in dictionary:
+            dictionary['energy'] = dictionary['omol_energy']
         data = cls(
             pos=dictionary["pos"],
             atomic_numbers=dictionary["atomic_numbers"],

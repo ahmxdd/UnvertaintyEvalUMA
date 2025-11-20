@@ -925,7 +925,7 @@ class HL_Gauss_Energy_Head_Linear(nn.Module, HeadInterface):
 
        self.min_value = -10.0
        self.max_value = 20.0
-       self.num_bins = 250
+       self.num_bins = 256
        bin_width = (self.max_value - self.min_value) / self.num_bins
        self.sigma = 0.75 * bin_width
 

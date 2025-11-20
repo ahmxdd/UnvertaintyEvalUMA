@@ -11,7 +11,7 @@ import torch
 
 from fairchem.core.datasets.atomic_data import AtomicData, atomicdata_list_to_batch
 
-
+# import pdb
 class MTCollater:
     def __init__(
         self,
@@ -37,7 +37,7 @@ class MTCollater:
         dataset_task_map: dict,
         exclude_keys: list,
     ) -> AtomicData:
-        data_list = self._add_missing_attr(data_list, dataset_task_map)
+        # data_list = self._add_missing_attr(data_list, dataset_task_map)
 
         return atomicdata_list_to_batch(data_list, exclude_keys=exclude_keys)
 
@@ -65,6 +65,9 @@ class MTCollater:
                 datasets_in_batch_to_task_configs[data.dataset] = dataset_task_map[
                     data.dataset
                 ]
+                # print(datasets_in_batch_to_task_configs.keys())
+                # breakpoint()
+                # pdb.set_trace()
                 for task, task_config in datasets_in_batch_to_task_configs[
                     data.dataset
                 ].items():

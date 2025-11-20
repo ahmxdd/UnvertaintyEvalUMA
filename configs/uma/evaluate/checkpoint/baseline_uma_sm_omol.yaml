@@ -1,0 +1,3 @@
+# use pt file
+ckpt_path: /pub0/qasim/biology/uma_runs/202511-1722-1415-c2f8/checkpoints/step_200000/inference_ckpt.pt # ${cluster.checkpoint_root_dir}/202505-0619-0026-495f/uma_sm_omol_baseline_final.pt
+model_name: uma_sm_omol
